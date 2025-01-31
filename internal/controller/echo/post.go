@@ -2,10 +2,13 @@ package echo
 
 import (
 	"errors"
+	"fmt"
 	"github.com/labstack/echo/v4"
 	"net/http"
+	"time"
 	"workshop/internal/controller"
 	"workshop/internal/service/workshop"
+	_ "workshop/internal/types"
 )
 
 type PostHandler struct {
@@ -25,10 +28,10 @@ func NewPostHandler(ws *workshop.Workshop) *PostHandler {
 //	@Accept			json
 //	@Produce		json
 //	@Param			search_query	query		string						false	"Search query"	maxlength(255)
-//	@Param			author_id		query		types.UserID				false	"Author ID"
+//	@Param			author_id		query		string						false	"Author ID"
 //	@Param			only_approved	query		boolean						false	"Filter to include only approved posts"
 //	@Param			show_declined	query		boolean						false	"Filter to include declined posts. Requires 'POST_MODERATOR' role."
-//	@Param			type			query		types.PostType				false	"Post type. Valid values should be enforced by server-side validation."
+//	@Param			type			query		string						false	"Post type. Valid values should be enforced by server-side validation."
 //	@Param			tags			query		[]string					false	"Tags filter"	collectionFormat(multi)	minlength(1)	maxlength(10)
 //	@Param			for_user_id		query		string						false	"User ID for whom posts are retrieved. Requires 'IMPERSONATOR' role."
 //	@Param			only_favorites	query		boolean						false	"Filter to include only favorite posts"
@@ -133,12 +136,12 @@ func (c *PostHandler) GetOne(ctx echo.Context) error {
 //	@Tags			Posts
 //	@Accept			json
 //	@Produce		json
-//	@Param			request	body		controller.CreatePostRequest	true	"Request payload containing new post data"
-//	@Success		201		{object}	workshop.Post					"Newly created post"
-//	@Failure		400		{object}	controller.APIError				"Bad Request – invalid input data"
-//	@Failure		403		{object}	controller.APIError				"Forbidden – insufficient permissions to create posts"
-//	@Failure		429		{object}	controller.APIError				"Too Many Requests – post creation limit exceeded"
-//	@Failure		500		{object}	controller.APIError				"Internal Server Error"
+//	@Param			request	body		controller.CreatePostRequest									true	"Request payload containing new post data"
+//	@Success		201		{object}	workshop.Post													"Newly created post"
+//	@Failure		400		{object}	controller.APIError												"Bad Request – invalid input data"
+//	@Failure		403		{object}	controller.APIError												"Forbidden – insufficient permissions to create posts"
+//	@Failure		429		{object}	controller.APIGenericError[controller.APIRateLimitErrorData]	"Rate limit exceeded"
+//	@Failure		500		{object}	controller.APIError												"Internal Server Error"
 //	@Router			/posts [post]
 //	@Security		DebugUserRoles
 //	@Security		DebugUserID
@@ -158,12 +161,16 @@ func (c *PostHandler) Create(ctx echo.Context) error {
 
 	post, err := c.ws.CreatePost(ctx.Request().Context(), req)
 	if err != nil {
-		switch {
-		case errors.Is(err, workshop.ErrLimitExceeded):
-			return echo.NewHTTPError(http.StatusTooManyRequests, "Too many posts created")
-		default:
-			return err
+		var rlErr *workshop.RateLimitExceededError
+		if errors.As(err, &rlErr) {
+			return echo.NewHTTPError(http.StatusTooManyRequests, &controller.APIGenericError[controller.APIRateLimitErrorData]{
+				Message: fmt.Sprintf("Rate limit exceeded. Try again after %s.", rlErr.Info.ResetAt.Format(time.RFC3339)),
+				Data: controller.APIRateLimitErrorData{
+					ResetAt: rlErr.Info.ResetAt,
+				},
+			})
 		}
+		return err
 	}
 
 	return ctx.JSON(http.StatusCreated, post)

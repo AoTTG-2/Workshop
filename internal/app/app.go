@@ -17,6 +17,7 @@ import (
 	"workshop/internal/router/middleware"
 	"workshop/internal/router/validator"
 	"workshop/internal/service/workshop"
+	"workshop/internal/service/workshop/limiter"
 )
 
 type Router interface {
@@ -30,6 +31,7 @@ type App struct {
 	redisClient *redis.Client
 	repo        repository.Repository
 	ws          *workshop.Workshop
+	limiter     workshop.Limiter
 }
 
 func New() (*App, error) {
@@ -91,9 +93,31 @@ func New() (*App, error) {
 		a.repo = repo
 	}
 
+	log.Info().Msg("Initializing rate limiter")
+	{
+		a.limiter = limiter.NewRedisLimiter(a.redisClient, "ws_limiter")
+	}
+
 	log.Info().Msgf("Initializing workshop service")
 	{
-		a.ws = workshop.New(a.repo)
+		ws, err := workshop.New(
+			&workshop.Config{
+				PostsLimit: workshop.LimitConfig{
+					Limit:  a.cfg.RateLimits.PostsLimit,
+					Period: a.cfg.RateLimits.PostsPeriod,
+				},
+				CommentsLimit: workshop.LimitConfig{
+					Limit:  a.cfg.RateLimits.CommentsLimit,
+					Period: a.cfg.RateLimits.CommentsPeriod,
+				},
+			},
+			a.repo,
+			a.limiter,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create workshop service: %w", err)
+		}
+		a.ws = ws
 	}
 
 	log.Info().Msgf("Initializing router")

@@ -2,10 +2,13 @@ package echo
 
 import (
 	"errors"
+	"fmt"
 	"github.com/labstack/echo/v4"
 	"net/http"
+	"time"
 	"workshop/internal/controller"
 	"workshop/internal/service/workshop"
+	_ "workshop/internal/types"
 )
 
 // AddComment godoc
@@ -15,12 +18,13 @@ import (
 //	@Tags			Comments
 //	@Accept			json
 //	@Produce		json
-//	@Param			request	body		controller.AddCommentRequest	true	"Request payload with comment data"
-//	@Success		200		{object}	workshop.Comment				"Comment created successfully"
-//	@Failure		400		{object}	controller.APIError				"Bad Request – invalid input payload"
-//	@Failure		403		{object}	controller.APIError				"Forbidden – insufficient user rights"
-//	@Failure		404		{object}	controller.APIError				"Not Found – associated post not found"
-//	@Failure		500		{object}	controller.APIError				"Internal Server Error"
+//	@Param			request	body		controller.AddCommentRequest									true	"Request payload with comment data"
+//	@Success		200		{object}	workshop.Comment												"Comment created successfully"
+//	@Failure		400		{object}	controller.APIError												"Bad Request – invalid input payload"
+//	@Failure		403		{object}	controller.APIError												"Forbidden – insufficient user rights"
+//	@Failure		404		{object}	controller.APIError												"Not Found – associated post not found"
+//	@Failure		429		{object}	controller.APIGenericError[controller.APIRateLimitErrorData]	"Rate limit exceeded"
+//	@Failure		500		{object}	controller.APIError												"Internal Server Error"
 //	@Router			/comments [post]
 //	@Security		DebugUserRoles
 //	@Security		DebugUserID
@@ -44,6 +48,15 @@ func (c *PostHandler) AddComment(ctx echo.Context) error {
 		case errors.Is(err, workshop.ErrPostNotFound):
 			return echo.NewHTTPError(http.StatusNotFound, "Post not found")
 		default:
+			var rlErr *workshop.RateLimitExceededError
+			if errors.As(err, &rlErr) {
+				return echo.NewHTTPError(http.StatusTooManyRequests, &controller.APIGenericError[controller.APIRateLimitErrorData]{
+					Message: fmt.Sprintf("Rate limit exceeded. Try again after %s.", rlErr.Info.ResetAt.Format(time.RFC3339)),
+					Data: controller.APIRateLimitErrorData{
+						ResetAt: rlErr.Info.ResetAt,
+					},
+				})
+			}
 			return err
 		}
 	}
@@ -144,8 +157,8 @@ func (c *PostHandler) DeleteComment(ctx echo.Context) error {
 //	@Tags			Posts, Comments
 //	@Accept			json
 //	@Produce		json
-//	@Param			postID		query		types.PostID			false	"Post ID"
-//	@Param			authorID	query		types.UserID			false	"Author ID"
+//	@Param			postID		query		int						false	"Post ID"
+//	@Param			authorID	query		string					false	"Author ID"
 //	@Param			sort_order	query		controller.SortOrder	false	"Sort order by creation time"	default(desc)
 //	@Param			page		query		int						true	"Page number"					minimum(1)
 //	@Param			limit		query		int						true	"Number of comments per page"	minimum(1)	maximum(100)

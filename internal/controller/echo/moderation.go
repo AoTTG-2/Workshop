@@ -4,6 +4,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"net/http"
 	"workshop/internal/controller"
+	_ "workshop/internal/service/workshop"
+	_ "workshop/internal/types"
 )
 
 // ModeratePost godoc
@@ -50,8 +52,8 @@ func (c *PostHandler) ModeratePost(ctx echo.Context) error {
 //	@Tags			Moderation
 //	@Accept			json
 //	@Produce		json
-//	@Param			postID		query		types.PostID				false	"Post ID"
-//	@Param			moderatorID	query		types.UserID				false	"Moderator ID"
+//	@Param			postID		query		int							false	"Post ID"
+//	@Param			moderatorID	query		string						false	"Moderator ID"
 //	@Param			action		query		types.ModerationActionType	false	"Moderation action"
 //	@Param			sort_order	query		controller.SortOrder		false	"Sort order by creation time"			default(desc)
 //	@Param			page		query		int							true	"Page number"							minimum(1)

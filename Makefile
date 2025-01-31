@@ -29,7 +29,7 @@ godoc:
 # Generate go app swagger documentation
 swag:
 	swag fmt
-	swag init --ot go,json --parseInternal -g ./cmd/workshop/main.go
+	swag init --ot go,json --parseDependency --parseInternal -g ./cmd/workshop/main.go
 
 
 ###########################

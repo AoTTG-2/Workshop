@@ -5,6 +5,8 @@ import (
 	"github.com/rs/zerolog/log"
 	_ "workshop/docs"
 	"workshop/internal/app"
+	_ "workshop/internal/controller"
+	_ "workshop/internal/controller/echo"
 )
 
 // @title						Workshop Service
