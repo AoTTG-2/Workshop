@@ -3,6 +3,7 @@ package config
 import (
 	"github.com/Jagerente/gocfg"
 	"github.com/Jagerente/gocfg/pkg/values"
+	"time"
 )
 
 type App struct {
@@ -38,11 +39,19 @@ type RedisConfig struct {
 }
 
 type Config struct {
-	App         App            `title:"App configuration"`
-	Logger      LoggerConfig   `title:"Logger configuration"`
-	Router      RouterConfig   `title:"Router configuration"`
-	RedisConfig RedisConfig    `title:"Redis configuration"`
-	Postgres    PostgresConfig `title:"Postgres configuration"`
+	App         App              `title:"App configuration"`
+	Logger      LoggerConfig     `title:"Logger configuration"`
+	Router      RouterConfig     `title:"Router configuration"`
+	RedisConfig RedisConfig      `title:"Redis configuration"`
+	Postgres    PostgresConfig   `title:"Postgres configuration"`
+	RateLimits  RateLimitsConfig `title:"Rate limits configuration"`
+}
+
+type RateLimitsConfig struct {
+	PostsLimit     uint64        `env:"POSTS_LIMIT" default:"30"`
+	PostsPeriod    time.Duration `env:"POSTS_PERIOD" default:"1h" description:"https://pkg.go.dev/time#ParseDuration"`
+	CommentsLimit  uint64        `env:"COMMENTS_LIMIT" default:"100"`
+	CommentsPeriod time.Duration `env:"COMMENTS_PERIOD" default:"30m" description:"https://pkg.go.dev/time#ParseDuration"`
 }
 
 func New() (*Config, error) {

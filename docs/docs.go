@@ -39,6 +39,18 @@ const docTemplate = `{
                 "summary": "Get Comments",
                 "parameters": [
                     {
+                        "type": "integer",
+                        "description": "Post ID",
+                        "name": "postID",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Author ID",
+                        "name": "authorID",
+                        "in": "query"
+                    },
+                    {
                         "enum": [
                             "asc",
                             "desc"
@@ -73,20 +85,20 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/workshop.Comment"
+                                "$ref": "#/definitions/workshop_internal_service_workshop.Comment"
                             }
                         }
                     },
                     "400": {
                         "description": "Bad Request – invalid payload",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -118,7 +130,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/controller.AddCommentRequest"
+                            "$ref": "#/definitions/workshop_internal_controller.AddCommentRequest"
                         }
                     }
                 ],
@@ -126,31 +138,37 @@ const docTemplate = `{
                     "200": {
                         "description": "Comment created successfully",
                         "schema": {
-                            "$ref": "#/definitions/workshop.Comment"
+                            "$ref": "#/definitions/workshop_internal_service_workshop.Comment"
                         }
                     },
                     "400": {
                         "description": "Bad Request – invalid input payload",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – insufficient user rights",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "404": {
                         "description": "Not Found – associated post not found",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limit exceeded",
+                        "schema": {
+                            "$ref": "#/definitions/workshop_internal_controller.APIGenericError-workshop_internal_controller_APIRateLimitErrorData"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -191,7 +209,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/controller.UpdateCommentRequest"
+                            "$ref": "#/definitions/workshop_internal_controller.UpdateCommentRequest"
                         }
                     }
                 ],
@@ -199,31 +217,31 @@ const docTemplate = `{
                     "200": {
                         "description": "Comment updated successfully",
                         "schema": {
-                            "$ref": "#/definitions/workshop.Comment"
+                            "$ref": "#/definitions/workshop_internal_service_workshop.Comment"
                         }
                     },
                     "400": {
                         "description": "Bad Request – invalid input payload",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – insufficient user rights",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "404": {
                         "description": "Not Found – comment not found",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -264,25 +282,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request – invalid input payload",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – insufficient user rights",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "404": {
                         "description": "Not Found – comment not found",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -310,6 +328,18 @@ const docTemplate = `{
                 ],
                 "summary": "Get Moderation Actions",
                 "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Post ID",
+                        "name": "postID",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Moderator ID",
+                        "name": "moderatorID",
+                        "in": "query"
+                    },
                     {
                         "enum": [
                             "approve",
@@ -355,26 +385,26 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/workshop.ModerationAction"
+                                "$ref": "#/definitions/workshop_internal_service_workshop.ModerationAction"
                             }
                         }
                     },
                     "400": {
                         "description": "Bad Request – invalid payload",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – caller lacks post moderator permissions",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -410,6 +440,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Author ID",
+                        "name": "author_id",
+                        "in": "query"
+                    },
+                    {
                         "type": "boolean",
                         "description": "Filter to include only approved posts",
                         "name": "only_approved",
@@ -419,6 +455,12 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "Filter to include declined posts. Requires 'POST_MODERATOR' role.",
                         "name": "show_declined",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Post type. Valid values should be enforced by server-side validation.",
+                        "name": "type",
                         "in": "query"
                     },
                     {
@@ -505,26 +547,26 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/workshop.Post"
+                                "$ref": "#/definitions/workshop_internal_service_workshop.Post"
                             }
                         }
                     },
                     "400": {
                         "description": "Bad Request – invalid filter parameters or conflicting filter options",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – insufficient permissions for specified filters",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -556,7 +598,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/controller.CreatePostRequest"
+                            "$ref": "#/definitions/workshop_internal_controller.CreatePostRequest"
                         }
                     }
                 ],
@@ -564,31 +606,31 @@ const docTemplate = `{
                     "201": {
                         "description": "Newly created post",
                         "schema": {
-                            "$ref": "#/definitions/workshop.Post"
+                            "$ref": "#/definitions/workshop_internal_service_workshop.Post"
                         }
                     },
                     "400": {
                         "description": "Bad Request – invalid input data",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – insufficient permissions to create posts",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "429": {
-                        "description": "Too Many Requests – post creation limit exceeded",
+                        "description": "Rate limit exceeded",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIGenericError-workshop_internal_controller_APIRateLimitErrorData"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -634,31 +676,31 @@ const docTemplate = `{
                     "200": {
                         "description": "Post details",
                         "schema": {
-                            "$ref": "#/definitions/workshop.Post"
+                            "$ref": "#/definitions/workshop_internal_service_workshop.Post"
                         }
                     },
                     "400": {
                         "description": "Bad Request – invalid parameters",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – insufficient permissions for specified filters",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "404": {
                         "description": "Not Found – post not found",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -697,7 +739,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/controller.UpdatePostRequest"
+                            "$ref": "#/definitions/workshop_internal_controller.UpdatePostRequest"
                         }
                     }
                 ],
@@ -705,37 +747,37 @@ const docTemplate = `{
                     "200": {
                         "description": "Updated post details",
                         "schema": {
-                            "$ref": "#/definitions/workshop.Post"
+                            "$ref": "#/definitions/workshop_internal_service_workshop.Post"
                         }
                     },
                     "400": {
                         "description": "Bad Request – invalid input data",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – insufficient permissions to update posts",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "404": {
                         "description": "Not Found – post not found",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "412": {
                         "description": "Precondition Failed – the post is not owned by the user",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -774,7 +816,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/controller.DeletePostRequest"
+                            "$ref": "#/definitions/workshop_internal_controller.DeletePostRequest"
                         }
                     }
                 ],
@@ -785,31 +827,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request – invalid input data",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – insufficient permissions to delete posts",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "404": {
                         "description": "Not Found – post not found",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "412": {
                         "description": "Precondition Failed – the post is not owned by the user",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -853,31 +895,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request – invalid input payload",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – only authorized users can favorite posts",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "404": {
                         "description": "Not Found – post not found",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "409": {
                         "description": "Conflict – post is already in favorites",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -919,25 +961,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request – invalid input payload",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – only authorized users can unfavorite posts",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "404": {
                         "description": "Not Found – post is not marked as favorite or does not exist\"\t//\t(рекомендуемый статус: 412 Precondition Failed, если статус отличается)",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -979,7 +1021,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/controller.ModeratePostRequest"
+                            "$ref": "#/definitions/workshop_internal_controller.ModeratePostRequest"
                         }
                     }
                 ],
@@ -990,19 +1032,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request – invalid payload",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – caller lacks post moderator permissions",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -1037,7 +1079,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/controller.RatePostRequest"
+                            "$ref": "#/definitions/workshop_internal_controller.RatePostRequest"
                         }
                     }
                 ],
@@ -1048,31 +1090,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request – invalid input or payload",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "403": {
                         "description": "Forbidden – only authorized users can rate posts",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "404": {
                         "description": "Not Found – the post was not found",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "409": {
                         "description": "Conflict – the post has already been rated by the user",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/controller.APIError"
+                            "$ref": "#/definitions/workshop_internal_controller.APIError"
                         }
                     }
                 }
@@ -1080,15 +1122,38 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "controller.APIError": {
+        "workshop_internal_controller.APIError": {
+            "type": "object",
+            "properties": {
+                "message": {}
+            }
+        },
+        "workshop_internal_controller.APIGenericError-workshop_internal_controller_APIRateLimitErrorData": {
             "type": "object",
             "properties": {
                 "message": {
+                    "type": "string",
+                    "x-order": "0"
+                },
+                "data": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/workshop_internal_controller.APIRateLimitErrorData"
+                        }
+                    ],
+                    "x-order": "1"
+                }
+            }
+        },
+        "workshop_internal_controller.APIRateLimitErrorData": {
+            "type": "object",
+            "properties": {
+                "reset_at": {
                     "type": "string"
                 }
             }
         },
-        "controller.AddCommentRequest": {
+        "workshop_internal_controller.AddCommentRequest": {
             "type": "object",
             "required": [
                 "content",
@@ -1105,7 +1170,7 @@ const docTemplate = `{
                 }
             }
         },
-        "controller.CreatePostRequest": {
+        "workshop_internal_controller.CreatePostRequest": {
             "type": "object",
             "required": [
                 "contents",
@@ -1174,10 +1239,10 @@ const docTemplate = `{
                 }
             }
         },
-        "controller.DeletePostRequest": {
+        "workshop_internal_controller.DeletePostRequest": {
             "type": "object"
         },
-        "controller.ModeratePostRequest": {
+        "workshop_internal_controller.ModeratePostRequest": {
             "type": "object",
             "required": [
                 "action"
@@ -1190,7 +1255,7 @@ const docTemplate = `{
                     ],
                     "allOf": [
                         {
-                            "$ref": "#/definitions/types.ModerationActionType"
+                            "$ref": "#/definitions/workshop_internal_types.ModerationActionType"
                         }
                     ],
                     "x-order": "0"
@@ -1201,7 +1266,7 @@ const docTemplate = `{
                 }
             }
         },
-        "controller.RateAction": {
+        "workshop_internal_controller.RateAction": {
             "type": "string",
             "enum": [
                 "upvote",
@@ -1214,7 +1279,7 @@ const docTemplate = `{
                 "RateActionRetract"
             ]
         },
-        "controller.RatePostRequest": {
+        "workshop_internal_controller.RatePostRequest": {
             "type": "object",
             "required": [
                 "rating"
@@ -1228,13 +1293,13 @@ const docTemplate = `{
                     ],
                     "allOf": [
                         {
-                            "$ref": "#/definitions/controller.RateAction"
+                            "$ref": "#/definitions/workshop_internal_controller.RateAction"
                         }
                     ]
                 }
             }
         },
-        "controller.UpdateCommentRequest": {
+        "workshop_internal_controller.UpdateCommentRequest": {
             "type": "object",
             "required": [
                 "content"
@@ -1247,7 +1312,7 @@ const docTemplate = `{
                 }
             }
         },
-        "controller.UpdatePostRequest": {
+        "workshop_internal_controller.UpdatePostRequest": {
             "type": "object",
             "required": [
                 "description",
@@ -1272,46 +1337,7 @@ const docTemplate = `{
                 }
             }
         },
-        "types.ModerationActionType": {
-            "type": "string",
-            "enum": [
-                "approve",
-                "decline"
-            ],
-            "x-enum-varnames": [
-                "ModerationActionTypeApprove",
-                "ModeratorActionTypeDecline"
-            ]
-        },
-        "types.ModerationStatus": {
-            "type": "string",
-            "enum": [
-                "approved",
-                "declined",
-                "pending"
-            ],
-            "x-enum-varnames": [
-                "ModerationStatusApproved",
-                "ModerationStatusDeclined",
-                "ModerationStatusPending"
-            ]
-        },
-        "types.RateType": {
-            "type": "string",
-            "enum": [
-                "upvoted",
-                "downvoted",
-                "voted",
-                "none"
-            ],
-            "x-enum-varnames": [
-                "RateTypeUpvoted",
-                "RateTypeDownvoted",
-                "RateTypeVoted",
-                "RateTypeNone"
-            ]
-        },
-        "workshop.Comment": {
+        "workshop_internal_service_workshop.Comment": {
             "type": "object",
             "properties": {
                 "id": {
@@ -1340,7 +1366,7 @@ const docTemplate = `{
                 }
             }
         },
-        "workshop.ModerationAction": {
+        "workshop_internal_service_workshop.ModerationAction": {
             "type": "object",
             "properties": {
                 "id": {
@@ -1350,7 +1376,7 @@ const docTemplate = `{
                 "post": {
                     "allOf": [
                         {
-                            "$ref": "#/definitions/workshop.Post"
+                            "$ref": "#/definitions/workshop_internal_service_workshop.Post"
                         }
                     ],
                     "x-order": "1"
@@ -1362,7 +1388,7 @@ const docTemplate = `{
                 "action": {
                     "allOf": [
                         {
-                            "$ref": "#/definitions/types.ModerationActionType"
+                            "$ref": "#/definitions/workshop_internal_types.ModerationActionType"
                         }
                     ],
                     "x-order": "3"
@@ -1377,7 +1403,7 @@ const docTemplate = `{
                 }
             }
         },
-        "workshop.Post": {
+        "workshop_internal_service_workshop.Post": {
             "type": "object",
             "properties": {
                 "id": {
@@ -1391,7 +1417,7 @@ const docTemplate = `{
                 "interaction_data": {
                     "allOf": [
                         {
-                            "$ref": "#/definitions/workshop.PostInteractionData"
+                            "$ref": "#/definitions/workshop_internal_service_workshop.PostInteractionData"
                         }
                     ],
                     "x-order": "10"
@@ -1430,7 +1456,7 @@ const docTemplate = `{
                 "contents": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/workshop.PostContent"
+                        "$ref": "#/definitions/workshop_internal_service_workshop.PostContent"
                     },
                     "x-order": "6"
                 },
@@ -1445,14 +1471,14 @@ const docTemplate = `{
                 "moderation_data": {
                     "allOf": [
                         {
-                            "$ref": "#/definitions/workshop.PostModerationData"
+                            "$ref": "#/definitions/workshop_internal_service_workshop.PostModerationData"
                         }
                     ],
                     "x-order": "9"
                 }
             }
         },
-        "workshop.PostContent": {
+        "workshop_internal_service_workshop.PostContent": {
             "type": "object",
             "properties": {
                 "id": {
@@ -1473,7 +1499,7 @@ const docTemplate = `{
                 }
             }
         },
-        "workshop.PostInteractionData": {
+        "workshop_internal_service_workshop.PostInteractionData": {
             "type": "object",
             "properties": {
                 "is_favorite": {
@@ -1483,20 +1509,20 @@ const docTemplate = `{
                 "vote": {
                     "allOf": [
                         {
-                            "$ref": "#/definitions/types.RateType"
+                            "$ref": "#/definitions/workshop_internal_types.RateType"
                         }
                     ],
                     "x-order": "1"
                 }
             }
         },
-        "workshop.PostModerationData": {
+        "workshop_internal_service_workshop.PostModerationData": {
             "type": "object",
             "properties": {
                 "status": {
                     "allOf": [
                         {
-                            "$ref": "#/definitions/types.ModerationStatus"
+                            "$ref": "#/definitions/workshop_internal_types.ModerationStatus"
                         }
                     ],
                     "x-order": "0"
@@ -1506,6 +1532,45 @@ const docTemplate = `{
                     "x-order": "1"
                 }
             }
+        },
+        "workshop_internal_types.ModerationActionType": {
+            "type": "string",
+            "enum": [
+                "approve",
+                "decline"
+            ],
+            "x-enum-varnames": [
+                "ModerationActionTypeApprove",
+                "ModeratorActionTypeDecline"
+            ]
+        },
+        "workshop_internal_types.ModerationStatus": {
+            "type": "string",
+            "enum": [
+                "approved",
+                "declined",
+                "pending"
+            ],
+            "x-enum-varnames": [
+                "ModerationStatusApproved",
+                "ModerationStatusDeclined",
+                "ModerationStatusPending"
+            ]
+        },
+        "workshop_internal_types.RateType": {
+            "type": "string",
+            "enum": [
+                "upvoted",
+                "downvoted",
+                "voted",
+                "none"
+            ],
+            "x-enum-varnames": [
+                "RateTypeUpvoted",
+                "RateTypeDownvoted",
+                "RateTypeVoted",
+                "RateTypeNone"
+            ]
         }
     },
     "securityDefinitions": {

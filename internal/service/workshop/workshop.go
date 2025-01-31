@@ -3,27 +3,35 @@ package workshop
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"time"
 	"workshop/internal/controller"
 	"workshop/internal/repository"
 	"workshop/internal/repository/entity"
 	repoErrors "workshop/internal/repository/errors"
-	"workshop/internal/types"
 )
 
-type Limiter interface {
-	Allowed(ctx context.Context, user types.UserID) (bool, error)
-	Trigger(ctx context.Context, user types.UserID) error
-}
-
 type Workshop struct {
-	repo        repository.Repository
-	postLimiter Limiter
+	repo    repository.Repository
+	limiter Limiter
 }
 
-func New(repo repository.Repository) *Workshop {
-	return &Workshop{repo: repo}
+func New(cfg *Config, repo repository.Repository, limiter Limiter) (*Workshop, error) {
+	limiter.RegisterGroup(
+		PostsLimitKey,
+		cfg.PostsLimit,
+	)
+	limiter.RegisterGroup(
+		CommentsLimitKey,
+		cfg.CommentsLimit,
+	)
+
+	return &Workshop{
+		repo:    repo,
+		limiter: limiter,
+	}, nil
 }
 
 func (w *Workshop) GetPosts(ctx context.Context, req *controller.GetPostsRequest) ([]*Post, error) {
@@ -100,13 +108,15 @@ func (w *Workshop) GetPost(ctx context.Context, req *controller.GetPostRequest) 
 }
 
 func (w *Workshop) CreatePost(ctx context.Context, req *controller.CreatePostRequest) (*Post, error) {
-	//ok, err := w.postLimiter.Allowed(ctx, req.UserID)
-	//if err != nil {
-	//	return nil, fmt.Errorf("failed to check post limit: %w", err)
-	//}
-	//if !ok {
-	//	return nil, ErrLimitExceeded
-	//}
+	info, err := w.limiter.Check(ctx, PostsLimitKey, string(req.UserID))
+	if err != nil {
+		return nil, fmt.Errorf("check limit error: %w", err)
+	}
+	if info.Remaining == 0 {
+		return nil, &RateLimitExceededError{
+			Info: info,
+		}
+	}
 
 	post := &entity.Post{
 		AuthorID:         req.UserID,
@@ -143,9 +153,12 @@ func (w *Workshop) CreatePost(ctx context.Context, req *controller.CreatePostReq
 		return nil, err
 	}
 
-	//if err := w.postLimiter.Trigger(ctx, req.UserID); err != nil {
-	//	log.Errorf("failed to trigger post limiter: %v", err)
-	//}
+	if err := w.limiter.TriggerIncrease(ctx, PostsLimitKey, string(req.UserID)); err != nil {
+		log.Error().
+			Str("user_id", string(req.UserID)).
+			Err(err).
+			Msg("Trigger increase limit error")
+	}
 
 	return presentPost(post), nil
 }
@@ -320,6 +333,16 @@ func (w *Workshop) RatePost(ctx context.Context, req *controller.RatePostRequest
 }
 
 func (w *Workshop) AddComment(ctx context.Context, req *controller.AddCommentRequest) (*Comment, error) {
+	info, err := w.limiter.Check(ctx, CommentsLimitKey, string(req.UserID))
+	if err != nil {
+		return nil, fmt.Errorf("check limit error: %w", err)
+	}
+	if info.Remaining == 0 {
+		return nil, &RateLimitExceededError{
+			Info: info,
+		}
+	}
+
 	comment := &entity.Comment{
 		PostID:   req.PostID,
 		AuthorID: req.UserID,
@@ -333,6 +356,13 @@ func (w *Workshop) AddComment(ctx context.Context, req *controller.AddCommentReq
 		default:
 			return nil, err
 		}
+	}
+
+	if err := w.limiter.TriggerIncrease(ctx, CommentsLimitKey, string(req.UserID)); err != nil {
+		log.Error().
+			Str("user_id", string(req.UserID)).
+			Err(err).
+			Msg("Trigger increase limit error")
 	}
 
 	return presentComment(comment), nil
