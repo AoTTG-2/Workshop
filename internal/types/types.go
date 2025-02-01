@@ -36,7 +36,7 @@ const (
 type ContentType string
 
 const (
-	ContentTypeSkinSet     = "skin_set"
+	ContentTypeSkin        = "skin"
 	ContentTypeCustomMap   = "custom_map"
 	ContentTypeCustomLogic = "custom_logic"
 	ContentTypeCustomAsset = "custom_asset"

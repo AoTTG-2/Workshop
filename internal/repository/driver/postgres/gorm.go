@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -17,14 +18,15 @@ import (
 )
 
 const (
-	PostsTableName             = "posts"
-	TagsTableName              = "tags"
-	PostContentsTableName      = "post_contents"
-	ModerationActionsTableName = "moderation_actions"
-	CommentsTableName          = "comments"
-	VotesTableName             = "votes"
-	PostTagsTagsTableName      = "post_tags"
-	FavoritesTableName         = "favorites"
+	PostsTableName               = "posts"
+	TagsTableName                = "tags"
+	PostContentsTableName        = "post_contents"
+	ModerationActionsTableName   = "moderation_actions"
+	CommentsTableName            = "comments"
+	VotesTableName               = "votes"
+	PostTagsTagsTableName        = "post_tags"
+	FavoritesTableName           = "favorites"
+	URLValidatorConfigsTableName = "url_validator_configs"
 )
 
 type GORMDriver struct {
@@ -557,4 +559,39 @@ func (d *GORMDriver) GetComments(ctx context.Context, filter repository.GetComme
 	}
 
 	return res, nil
+}
+
+func (d *GORMDriver) GetURLValidatorConfig(ctx context.Context, validatorType string) (*entity.URLValidatorConfig, error) {
+	config := &entity.URLValidatorConfig{}
+	if err := d.db.WithContext(ctx).Where("type = ?", validatorType).First(config).Error; err != nil {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			return nil, repoErrors.ErrNotFound
+		default:
+			return nil, err
+		}
+	}
+	return config, nil
+}
+
+func (d *GORMDriver) GetAllURLValidatorConfigs(ctx context.Context, out repository.Appender[*entity.URLValidatorConfig]) error {
+	rows, err := d.db.WithContext(ctx).Model(&entity.URLValidatorConfig{}).Rows()
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Error().Err(err).Msg("failed to close rows")
+		}
+	}()
+
+	for rows.Next() {
+		cfg := &entity.URLValidatorConfig{}
+		if err := d.db.ScanRows(rows, cfg); err != nil {
+			return err
+		}
+		out.Append(cfg)
+	}
+	return nil
 }
