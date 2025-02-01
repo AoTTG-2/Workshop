@@ -109,4 +109,6 @@ type Repository interface {
 	DeleteComment(ctx context.Context, comment *entity.Comment) error
 	GetCommentByID(ctx context.Context, id types.CommentID) (*entity.Comment, error)
 	GetComments(ctx context.Context, filter GetCommentsFilter) ([]*entity.Comment, error)
+	GetURLValidatorConfig(ctx context.Context, validatorType string) (*entity.URLValidatorConfig, error)
+	GetAllURLValidatorConfigs(ctx context.Context, out Appender[*entity.URLValidatorConfig]) error
 }

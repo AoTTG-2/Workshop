@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/Jagerente/gocfg"
 	"github.com/Jagerente/gocfg/pkg/values"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -62,6 +63,7 @@ func teardownTestDB(t *testing.T, driver *GORMDriver) {
 		ModerationActionsTableName,
 		PostTagsTagsTableName,
 		CommentsTableName,
+		URLValidatorConfigsTableName,
 	})
 	require.NoError(t, err)
 
@@ -2366,4 +2368,108 @@ func TestGORMDriver_DeleteComment(t *testing.T) {
 		})
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
 	})
+}
+
+func TestGORMDriver_GetURLValidatorConfig(t *testing.T) {
+	driver := setupTestDB(t)
+	defer teardownTestDB(t, driver)
+	ctx := context.Background()
+
+	err := driver.Truncate(ctx, []string{URLValidatorConfigsTableName})
+	require.NoError(t, err)
+
+	fixture := &entity.URLValidatorConfig{
+		Type:       "image",
+		Protocols:  pq.StringArray([]string{"http", "https"}),
+		Domains:    pq.StringArray([]string{"i.imgur.com", "imgur.com", "image.ibb.co"}),
+		Extensions: pq.StringArray([]string{".jpg", ".png", ".jpeg"}),
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	err = driver.db.Create(fixture).Error
+	require.NoError(t, err)
+
+	t.Run("Found", func(t *testing.T) {
+		cfg, err := driver.GetURLValidatorConfig(ctx, "image")
+		require.NoError(t, err)
+		assert.NotNil(t, cfg)
+		assert.Equal(t, "image", cfg.Type)
+		assert.Equal(t, pq.StringArray([]string{"http", "https"}), cfg.Protocols)
+		assert.Equal(t, pq.StringArray([]string{"i.imgur.com", "imgur.com", "image.ibb.co"}), cfg.Domains)
+		assert.Equal(t, pq.StringArray([]string{".jpg", ".png", ".jpeg"}), cfg.Extensions)
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		cfg, err := driver.GetURLValidatorConfig(ctx, "nonexistent")
+		require.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
+	})
+
+	t.Run("GenericError", func(t *testing.T) {
+		newDriver := setupTestDB(t)
+		teardownTestDB(t, newDriver)
+
+		_, err := newDriver.GetURLValidatorConfig(ctx, "image")
+		require.Error(t, err)
+	})
+}
+
+func TestGORMDriver_GetAllURLValidatorConfigs(t *testing.T) {
+	driver := setupTestDB(t)
+	defer teardownTestDB(t, driver)
+	ctx := context.Background()
+
+	fixtures := []entity.URLValidatorConfig{
+		{
+			Type:       "image",
+			Protocols:  []string{"http", "https"},
+			Domains:    []string{"i.imgur.com", "imgur.com", "image.ibb.co"},
+			Extensions: []string{".jpg", ".png", ".jpeg"},
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+		},
+		{
+			Type:       "text",
+			Protocols:  []string{"http", "https"},
+			Domains:    []string{"pastebin.com", "www.dropbox.com", "raw.githubusercontent.com"},
+			Extensions: []string{".txt", ".md", ".csv"},
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+		},
+		{
+			Type:       "asset_bundle",
+			Protocols:  []string{"http", "https"},
+			Domains:    []string{"www.dropbox.com"},
+			Extensions: []string{".exe", ".bin", ".dll"},
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+		},
+	}
+
+	err := driver.Truncate(ctx, []string{URLValidatorConfigsTableName})
+	require.NoError(t, err)
+
+	for i := range fixtures {
+		err := driver.db.Create(&fixtures[i]).Error
+		assert.NoError(t, err)
+	}
+
+	app := appender.NewMapAppender[string, *entity.URLValidatorConfig](0, func(cfg *entity.URLValidatorConfig) string {
+		return cfg.Type
+	})
+
+	err = driver.GetAllURLValidatorConfigs(ctx, app)
+	assert.NoError(t, err)
+	m := app.Map()
+	assert.Equal(t, 3, len(m))
+	cfg, ok := m["image"]
+	assert.True(t, ok)
+	assert.Equal(t, "image", cfg.Type)
+	cfg, ok = m["text"]
+	assert.True(t, ok)
+	assert.Equal(t, "text", cfg.Type)
+	cfg, ok = m["asset_bundle"]
+	assert.True(t, ok)
+	assert.Equal(t, "asset_bundle", cfg.Type)
 }

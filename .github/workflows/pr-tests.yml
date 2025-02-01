@@ -40,10 +40,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Test Repository
+      - name: Unit Tests
         env:
           TEST_POSTGRES_CONN_STRING: postgres://postgres:12345@localhost:5432/test_workshop?sslmode=disable
           # Local run with `act`
           # TEST_POSTGRES_MIGRATIONS_PATH: /mnt/c/Users/Jagerente/Documents/GitHub/workshop-service/migrations/postgres
           TEST_POSTGRES_MIGRATIONS_PATH: ${{ github.workspace }}/migrations/postgres
-        run: go test -v ./internal/repository/driver/postgres
+        run: |
+          go test -v ./internal/repository/driver/postgres \
+                     ./internal/service/workshop/limiter \
+                     ./pkg/urlwlv

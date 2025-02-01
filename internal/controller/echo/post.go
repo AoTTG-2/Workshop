@@ -8,16 +8,35 @@ import (
 	"time"
 	"workshop/internal/controller"
 	"workshop/internal/service/workshop"
+	"workshop/internal/types"
 	_ "workshop/internal/types"
 )
 
-type PostHandler struct {
-	*baseHandler
-	ws *workshop.Workshop
+type URLValidator interface {
+	Validate(url string) error
 }
 
-func NewPostHandler(ws *workshop.Workshop) *PostHandler {
-	return &PostHandler{ws: ws}
+type PostHandler struct {
+	*baseHandler
+	ws                      *workshop.Workshop
+	imageURLValidator       URLValidator
+	textURLValidator        URLValidator
+	assetBundleURLValidator URLValidator
+}
+
+func NewPostHandler(
+	ws *workshop.Workshop,
+	imageURLValidator URLValidator,
+	textURLValidator URLValidator,
+	assetBundleURLValidator URLValidator,
+) *PostHandler {
+	return &PostHandler{
+		baseHandler:             &baseHandler{},
+		ws:                      ws,
+		imageURLValidator:       imageURLValidator,
+		textURLValidator:        textURLValidator,
+		assetBundleURLValidator: assetBundleURLValidator,
+	}
 }
 
 // GetList godoc
@@ -158,6 +177,40 @@ func (c *PostHandler) Create(ctx echo.Context) error {
 	}
 
 	req.UserID = user.ID
+
+	if req.PreviewURL != "" {
+		if err := c.imageURLValidator.Validate(req.PreviewURL); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid preview URL '%s': %v", req.PreviewURL, err))
+		}
+	}
+
+	for _, content := range req.Contents {
+		if !content.IsLink {
+			continue
+		}
+
+		switch content.Type {
+		// TODO: Implement how to pass and store skins
+		// Probably something like type = "skin:skin_part"
+		// Or something more complex if we want to support multiple skin sets / skins of the same type and group it somehow
+		case types.ContentTypeSkin:
+			if err := c.imageURLValidator.Validate(content.Data); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid skin URL '%s': %v", content.Data, err))
+			}
+		case types.ContentTypeCustomLogic:
+			if err := c.textURLValidator.Validate(content.Data); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid custom logic URL '%s': %v", content.Data, err))
+			}
+		case types.ContentTypeCustomMap:
+			if err := c.textURLValidator.Validate(content.Data); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid custom map URL '%s': %v", content.Data, err))
+			}
+		case types.ContentTypeCustomAsset:
+			if err := c.assetBundleURLValidator.Validate(content.Data); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid asset bundle URL '%s': %v", content.Data, err))
+			}
+		}
+	}
 
 	post, err := c.ws.CreatePost(ctx.Request().Context(), req)
 	if err != nil {

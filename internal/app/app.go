@@ -12,12 +12,15 @@ import (
 	"workshop/internal/config"
 	"workshop/internal/controller/echo"
 	"workshop/internal/repository"
+	"workshop/internal/repository/entity"
 	repoProvider "workshop/internal/repository/provider"
 	"workshop/internal/router"
 	"workshop/internal/router/middleware"
 	"workshop/internal/router/validator"
 	"workshop/internal/service/workshop"
 	"workshop/internal/service/workshop/limiter"
+	"workshop/pkg/appender"
+	"workshop/pkg/urlwlv"
 )
 
 type Router interface {
@@ -26,12 +29,15 @@ type Router interface {
 }
 
 type App struct {
-	cfg         *config.Config
-	r           Router
-	redisClient *redis.Client
-	repo        repository.Repository
-	ws          *workshop.Workshop
-	limiter     workshop.Limiter
+	cfg                     *config.Config
+	r                       Router
+	redisClient             *redis.Client
+	repo                    repository.Repository
+	ws                      *workshop.Workshop
+	limiter                 workshop.Limiter
+	imageURLValidator       *urlwlv.Validator
+	textURLValidator        *urlwlv.Validator
+	assetBundleURLValidator *urlwlv.Validator
 }
 
 func New() (*App, error) {
@@ -93,6 +99,35 @@ func New() (*App, error) {
 		a.repo = repo
 	}
 
+	log.Info().Msgf("Initializing URL validators")
+	{
+		cfgMap := appender.NewMapAppender(0, func(v *entity.URLValidatorConfig) string {
+			return v.Type
+		})
+		if err := a.repo.GetAllURLValidatorConfigs(context.Background(), cfgMap); err != nil {
+			return nil, fmt.Errorf("failed to get URL validator configs from repo: %w", err)
+		}
+
+		imageCfg, ok := cfgMap.Map()["image"]
+		if !ok {
+			return nil, fmt.Errorf("failed to find image URL validator config")
+		}
+
+		textCfg, ok := cfgMap.Map()["text"]
+		if !ok {
+			return nil, fmt.Errorf("failed to find text URL validator config")
+		}
+
+		assetBundleCfg, ok := cfgMap.Map()["asset_bundle"]
+		if !ok {
+			return nil, fmt.Errorf("failed to find asset bundle URL validator config")
+		}
+
+		a.imageURLValidator = urlwlv.NewValidator(imageCfg.Protocols, imageCfg.Domains, imageCfg.Extensions)
+		a.textURLValidator = urlwlv.NewValidator(textCfg.Protocols, textCfg.Domains, textCfg.Extensions)
+		a.assetBundleURLValidator = urlwlv.NewValidator(assetBundleCfg.Protocols, assetBundleCfg.Domains, assetBundleCfg.Extensions)
+	}
+
 	log.Info().Msg("Initializing rate limiter")
 	{
 		a.limiter = limiter.NewRedisLimiter(a.redisClient, "ws_limiter")
@@ -150,7 +185,12 @@ func New() (*App, error) {
 			r.GET("/swagger/*", echoSwagger.WrapHandler)
 			api := r.Group("/api")
 			{
-				postHandler := echo.NewPostHandler(a.ws)
+				postHandler := echo.NewPostHandler(
+					a.ws,
+					a.imageURLValidator,
+					a.textURLValidator,
+					a.assetBundleURLValidator,
+				)
 
 				posts := api.Group("/posts")
 				{
