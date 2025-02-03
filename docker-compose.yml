@@ -87,6 +87,20 @@ services:
     volumes:
       - ./docs/:/docs
 
+  demo:
+    build:
+      context: .
+      dockerfile: ./docker/workshop-demo/Dockerfile
+      args:
+        - VITE_WORKSHOP_HOST=http://localhost:${SERVER_PORT_OUT:-8080}
+    container_name: workshop_demo
+    ports:
+      - '${DEMO_PORT_OUT:-14001}:80'
+    depends_on:
+      - workshop
+    networks:
+      - default
+
 networks:
   default:
     name: workshop_network
