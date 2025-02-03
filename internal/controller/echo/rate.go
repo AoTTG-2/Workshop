@@ -44,7 +44,7 @@ func (c *PostHandler) RatePost(ctx echo.Context) error {
 		case errors.Is(err, workshop.ErrPostNotFound):
 			return echo.NewHTTPError(http.StatusNotFound, "Post not found")
 		case errors.Is(err, workshop.ErrPostNotRated):
-			return echo.NewHTTPError(http.StatusConflict, "Post has already been rated")
+			return echo.NewHTTPError(http.StatusConflict, "Post not rated")
 		default:
 			return err
 		}

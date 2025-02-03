@@ -3,6 +3,8 @@ package config
 import (
 	"github.com/Jagerente/gocfg"
 	"github.com/Jagerente/gocfg/pkg/values"
+	"gorm.io/gorm/logger"
+
 	"time"
 )
 
@@ -16,13 +18,14 @@ type LoggerConfig struct {
 }
 
 type PostgresConfig struct {
-	Host           string `env:"POSTGRES_HOST" default:"postgres:5432"`
-	Username       string `env:"POSTGRES_USERNAME" default:"postgres"`
-	Password       string `env:"POSTGRES_PASSWORD" default:"12345"`
-	Database       string `env:"POSTGRES_DATABASE" default:"workshop"`
-	Params         string `env:"POSTGRES_PARAMS,omitempty"`
-	MigrationsPath string `env:"POSTGRES_MIGRATIONS_PATH,omitempty" example:"/migrations/postgres"`
-	DoMigrate      bool   `env:"POSTGRES_DO_MIGRATE" default:"false" description:"Whether to run app-driver migrations on start"`
+	Host           string          `env:"POSTGRES_HOST" default:"postgres:5432"`
+	Username       string          `env:"POSTGRES_USERNAME" default:"postgres"`
+	Password       string          `env:"POSTGRES_PASSWORD" default:"12345"`
+	Database       string          `env:"POSTGRES_DATABASE" default:"workshop"`
+	Params         string          `env:"POSTGRES_PARAMS,omitempty"`
+	MigrationsPath string          `env:"POSTGRES_MIGRATIONS_PATH,omitempty" example:"/migrations/postgres"`
+	DoMigrate      bool            `env:"POSTGRES_DO_MIGRATE" default:"false" description:"Whether to run app-driver migrations on start"`
+	LogLevel       logger.LogLevel `env:"POSTGRES_LOGLEVEL" default:"3" description:"https://pkg.go.dev/gorm.io/gorm/logger@v1.31.0#LogLevel"`
 }
 
 type RouterConfig struct {
