@@ -209,6 +209,8 @@ func (c *PostHandler) Create(ctx echo.Context) error {
 			if err := c.assetBundleURLValidator.Validate(content.Data); err != nil {
 				return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid asset bundle URL '%s': %v", content.Data, err))
 			}
+		default:
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Unsupported content type '%s'", content.Type))
 		}
 	}
 
@@ -234,6 +236,9 @@ func (c *PostHandler) Create(ctx echo.Context) error {
 //	@Summary		Update Post
 //	@Description	Updates an existing post.
 //	@Description	The caller must have the 'POST_CREATOR' role and must be the owner of the post.
+//	@Description	Leave content ID 0 to add new content.
+//	@Description	If content ID is not 0, it will try to update the content.
+//	@Description	When updating, excluded contents and tags will be removed.
 //	@Tags			Posts
 //	@Accept			json
 //	@Produce		json
@@ -269,6 +274,8 @@ func (c *PostHandler) Update(ctx echo.Context) error {
 			return echo.NewHTTPError(http.StatusNotFound, "Post not found")
 		case errors.Is(err, workshop.ErrPostNotOwned):
 			return echo.NewHTTPError(http.StatusPreconditionFailed, "Post not owned by the user")
+		case errors.Is(err, workshop.ErrNotFound):
+			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		default:
 			return err
 		}

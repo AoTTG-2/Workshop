@@ -4,8 +4,12 @@
 
 # (Re-)start container without rebuild and cleaning dependencies (volumes/images/networks)
 restart: down up
+rebuild:
+	docker compose down --remove-orphans
+	make build
+
 # Use this to rebuild and clean old junk (volumes/images/networks)
-rebuild: clean build
+frebuild: clean build
 
 up:
 	docker compose up -d

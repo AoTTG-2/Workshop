@@ -50,6 +50,7 @@ func (w *Workshop) GetPosts(ctx context.Context, req *controller.GetPostsRequest
 		IncludePostContents: false,
 		IncludeTags:         true,
 		ShowDeclined:        req.ShowDeclined,
+		ForUserID:           req.ForUserID,
 	}
 
 	sortOrder := repository.Order(0)
@@ -164,7 +165,10 @@ func (w *Workshop) CreatePost(ctx context.Context, req *controller.CreatePostReq
 }
 
 func (w *Workshop) UpdatePost(ctx context.Context, req *controller.UpdatePostRequest) (*Post, error) {
-	post, err := w.repo.GetPost(ctx, repository.GetPostFilter{PostID: req.PostID, ShowDeclined: true})
+	post, err := w.repo.GetPost(ctx, repository.GetPostFilter{
+		PostID:       req.PostID,
+		ShowDeclined: true,
+	})
 	if err != nil {
 		switch {
 		case errors.Is(err, repoErrors.ErrNotFound):
@@ -181,9 +185,34 @@ func (w *Workshop) UpdatePost(ctx context.Context, req *controller.UpdatePostReq
 	post.Title = req.Title
 	post.Description = req.Description
 	post.PreviewURL = req.PreviewURL
+	post.PostType = req.Type
+
+	updatedTags := make([]*entity.Tag, 0, len(req.Tags))
+	for i := range req.Tags {
+		updatedTags = append(updatedTags, &entity.Tag{
+			Name: req.Tags[i],
+		})
+	}
+	post.Tags = updatedTags
+
+	var updatedContents []*entity.PostContent
+	for _, cReq := range req.Contents {
+		updatedContents = append(updatedContents, &entity.PostContent{
+			ID:          cReq.ID,
+			ContentType: cReq.ContentType,
+			ContentData: cReq.ContentData,
+			IsLink:      cReq.IsLink,
+		})
+	}
+	post.Contents = updatedContents
 
 	if err := w.repo.UpdatePost(ctx, post); err != nil {
-		return nil, err
+		switch {
+		case errors.Is(err, repoErrors.ErrNotFound):
+			return nil, errors.Join(ErrNotFound, err)
+		default:
+			return nil, err
+		}
 	}
 
 	return presentPost(post), nil
@@ -307,6 +336,8 @@ func (w *Workshop) RatePost(ctx context.Context, req *controller.RatePostRequest
 				return err
 			}
 		}
+
+		return nil
 	}
 
 	vote := &entity.Vote{

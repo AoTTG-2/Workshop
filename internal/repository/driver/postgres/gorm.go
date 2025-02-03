@@ -118,16 +118,73 @@ func (d *GORMDriver) CreatePostWithContentsAndTags(ctx context.Context, p *entit
 }
 
 func (d *GORMDriver) UpdatePost(ctx context.Context, p *entity.Post) error {
-	res := d.db.WithContext(ctx).Model(p).Select("Title", "Description", "PreviewURL").Updates(p)
-	if res.Error != nil {
-		return fmt.Errorf("failed to update post: %w", res.Error)
-	}
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing entity.Post
+		if err := tx.Where("id = ?", p.ID).First(&existing).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return repoErrors.ErrNotFound
+			}
+			return err
+		}
 
-	if res.RowsAffected == 0 {
-		return repoErrors.ErrNotFound
-	}
+		for i, tag := range p.Tags {
+			if tag.ID == 0 && tag.Name != "" {
+				if err := tx.
+					Where("name = ?", tag.Name).
+					FirstOrCreate(&p.Tags[i]).Error; err != nil {
+					return fmt.Errorf("failed to find or create tag: %w", err)
+				}
+			}
+		}
+		if err := tx.Model(&existing).Association("Tags").Replace(p.Tags); err != nil {
+			return fmt.Errorf("failed to update tags: %w", err)
+		}
 
-	return nil
+		if err := tx.Model(&existing).Updates(map[string]interface{}{
+			"title":       p.Title,
+			"description": p.Description,
+			"preview_url": p.PreviewURL,
+			"post_type":   p.PostType,
+			"updated_at":  time.Now(),
+		}).Error; err != nil {
+			return fmt.Errorf("failed to update post: %w", err)
+		}
+
+		var contentIDs []types.PostContentID
+		for _, c := range p.Contents {
+			if c.ID == 0 {
+				c.PostID = existing.ID
+				if err := tx.Create(&c).Error; err != nil {
+					return fmt.Errorf("failed to create content: %w", err)
+				}
+				contentIDs = append(contentIDs, c.ID)
+			} else {
+				contentIDs = append(contentIDs, c.ID)
+				res := tx.Model(&c).
+					Where("id = ?", c.ID).
+					Updates(map[string]interface{}{
+						"content_type": c.ContentType,
+						"content_data": c.ContentData,
+						"is_link":      c.IsLink,
+					})
+
+				if res.Error != nil {
+					return fmt.Errorf("failed to update content: %w", res.Error)
+				}
+				if res.RowsAffected == 0 {
+					return fmt.Errorf("failed to update content: %w", repoErrors.ErrNotFound)
+				}
+			}
+		}
+
+		if err := tx.
+			Where("post_id = ? AND id NOT IN (?)", existing.ID, contentIDs).
+			Delete(&entity.PostContent{}).Error; err != nil {
+			return fmt.Errorf("failed to delete old contents: %w", err)
+		}
+
+		return nil
+	})
 }
 
 func (d *GORMDriver) DeletePost(ctx context.Context, postID types.PostID, hard bool) error {
@@ -199,7 +256,7 @@ func (d *GORMDriver) GetPost(ctx context.Context, filter repository.GetPostFilte
 
 	tx = tx.Preload("LastModeration")
 
-	if err := tx.First(&post).Error; err != nil {
+	if err := tx.First(&post, filter.PostID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, repoErrors.ErrNotFound
 		}

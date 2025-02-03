@@ -8,6 +8,7 @@ import (
 func presentPost(post *entity.Post) *Post {
 	p := &Post{
 		ID:          post.ID,
+		AuthorID:    post.AuthorID,
 		Title:       post.Title,
 		Description: post.Description,
 		PreviewURL:  post.PreviewURL,

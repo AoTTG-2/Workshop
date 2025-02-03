@@ -31,6 +31,7 @@ const (
 	PostTypeMap            = "map"
 	PostTypeMapAndGameMode = "map_and_game_mode"
 	PostTypeMapSuite       = "map_suite"
+	PostTypeSkinSet        = "skin_set"
 )
 
 type ContentType string

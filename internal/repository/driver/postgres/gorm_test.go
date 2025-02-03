@@ -148,27 +148,96 @@ func TestGORMDriver_UpdatePost(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, driver.CreatePostWithContentsAndTags(context.Background(), post))
 
-	t.Run("Success", func(t *testing.T) {
+	t.Run("Success - basic fields", func(t *testing.T) {
 		post.Title = "Updated Portal 2"
 		post.Description = "Updated Portal 2 Game Mode And Maps"
 		post.PreviewURL = "updatedurl"
+
 		err := driver.UpdatePost(context.Background(), post)
 		require.NoError(t, err)
 
 		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{
 			PostID: post.ID,
 		})
+		require.NoError(t, err)
+
 		assert.Equal(t, "Updated Portal 2", p.Title)
 		assert.Equal(t, "Updated Portal 2 Game Mode And Maps", p.Description)
 		assert.Equal(t, "updatedurl", p.PreviewURL)
-		assert.WithinDuration(t, p.UpdatedAt, time.Now(), time.Second)
+		assert.WithinDuration(t, time.Now(), p.UpdatedAt, 2*time.Second)
 	})
 
-	t.Run("Invalid post PostID", func(t *testing.T) {
+	t.Run("Success - change post_type, tags, and contents", func(t *testing.T) {
+		post.PostType = types.PostTypeSkinSet
+
+		post.Tags = []*entity.Tag{
+			post.Tags[0],   // "Mission"
+			post.Tags[2],   // "Non-canonical"
+			{Name: "Coop"}, // new
+		}
+
+		firstContent := post.Contents[0]
+		firstContent.ContentData = "updatedLongUrl"
+		firstContent.IsLink = false // changed from true
+
+		post.Contents = []*entity.PostContent{
+			firstContent,
+			{
+				ContentType: types.ContentTypeCustomMap,
+				ContentData: "newMapFile",
+				IsLink:      false,
+			},
+		}
+
+		err := driver.UpdatePost(context.Background(), post)
+		require.NoError(t, err)
+
+		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{
+			PostID:              post.ID,
+			IncludeTags:         true,
+			IncludePostContents: true,
+		})
+		require.NoError(t, err)
+
+		assert.EqualValues(t, types.PostTypeSkinSet, p.PostType)
+
+		assert.Len(t, p.Tags, 3)
+		tagNames := make([]string, 0, 3)
+		for _, tg := range p.Tags {
+			tagNames = append(tagNames, tg.Name)
+		}
+		assert.NotContains(t, tagNames, "Other")
+		assert.Contains(t, tagNames, "Coop")
+
+		assert.Len(t, p.Contents, 2)
+
+		var updatedFirst *entity.PostContent
+		for _, c := range p.Contents {
+			if c.ContentData == "updatedLongUrl" {
+				updatedFirst = c
+				break
+			}
+		}
+		require.NotNil(t, updatedFirst)
+		assert.False(t, updatedFirst.IsLink, "should have changed from true to false")
+
+		var newOne *entity.PostContent
+		for _, c := range p.Contents {
+			if c.ContentData == "newMapFile" {
+				newOne = c
+				break
+			}
+		}
+		require.NotNil(t, newOne)
+
+		for _, c := range p.Contents {
+			assert.NotEqual(t, "mapraw", c.ContentData)
+		}
+	})
+
+	t.Run("Invalid post ID", func(t *testing.T) {
 		updatedPost := &entity.Post{
 			ID:          838383,
 			Title:       "Some Title",
@@ -177,6 +246,20 @@ func TestGORMDriver_UpdatePost(t *testing.T) {
 		}
 
 		err := driver.UpdatePost(context.Background(), updatedPost)
+		require.ErrorIs(t, err, repoErrors.ErrNotFound)
+	})
+
+	t.Run("Fail - content with invalid ID", func(t *testing.T) {
+		invalidIDContent := &entity.PostContent{
+			ID:          999999,
+			ContentType: types.ContentTypeCustomMap,
+			ContentData: "invalidIDContent",
+			IsLink:      false,
+		}
+
+		post.Contents = append(post.Contents, invalidIDContent)
+
+		err := driver.UpdatePost(context.Background(), post)
 		require.ErrorIs(t, err, repoErrors.ErrNotFound)
 	})
 }
