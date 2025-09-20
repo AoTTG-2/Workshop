@@ -3,14 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
-	echoMiddleware "github.com/labstack/echo/v4/middleware"
-	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
-	echoSwagger "github.com/swaggo/echo-swagger"
 	"net/http"
+	"strings"
 	"workshop/internal/config"
-	"workshop/internal/controller/echo"
+	handlers "workshop/internal/controller/echo"
 	"workshop/internal/repository"
 	"workshop/internal/repository/entity"
 	repoProvider "workshop/internal/repository/provider"
@@ -21,6 +17,14 @@ import (
 	"workshop/internal/service/workshop/limiter"
 	"workshop/pkg/appender"
 	"workshop/pkg/urlwlv"
+
+	"github.com/labstack/echo/v4"
+	echoMiddleware "github.com/labstack/echo/v4/middleware"
+	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	echoSwagger "github.com/swaggo/echo-swagger"
+	"github.com/ziflex/lecho/v3"
 )
 
 type Router interface {
@@ -32,7 +36,7 @@ type App struct {
 	cfg                     *config.Config
 	r                       Router
 	redisClient             *redis.Client
-	repo                    repository.Repository
+	repo                    repository.Driver
 	ws                      *workshop.Workshop
 	limiter                 workshop.Limiter
 	imageURLValidator       *urlwlv.Validator
@@ -40,7 +44,7 @@ type App struct {
 	assetBundleURLValidator *urlwlv.Validator
 }
 
-func New() (*App, error) {
+func New(ctx context.Context) (*App, error) {
 	log.Info().Msgf("Initializing application")
 	a := new(App)
 
@@ -69,29 +73,28 @@ func New() (*App, error) {
 			Username: a.cfg.RedisConfig.Username,
 			Password: a.cfg.RedisConfig.Password,
 		})
-		if err := a.redisClient.Ping(context.Background()).Err(); err != nil {
+		if err := a.redisClient.Ping(ctx).Err(); err != nil {
 			return nil, fmt.Errorf("failed to ping redis: %w", err)
 		}
 	}
 
 	log.Info().Msgf("Initializing repository")
 	{
-		p := repoProvider.NewRepositoryProvider()
-
-		repo, err := p.GetPostgresRepository(&repoProvider.PostgresConfiguration{
+		repo, err := repoProvider.New().NewPostgresDriver(ctx, &repoProvider.PostgresConfiguration{
 			Host:           a.cfg.Postgres.Host,
 			Database:       a.cfg.Postgres.Database,
 			Username:       a.cfg.Postgres.Username,
 			Password:       a.cfg.Postgres.Password,
 			MigrationsPath: a.cfg.Postgres.MigrationsPath,
 			Params:         a.cfg.Postgres.Params,
+			LogLevel:       a.cfg.Postgres.LogLevel,
 		})
 		if err != nil {
 			return nil, err
 		}
 
 		if a.cfg.Postgres.DoMigrate {
-			if err := repo.Migrate(context.Background()); err != nil {
+			if err := repo.Migrate(ctx); err != nil {
 				return nil, err
 			}
 		}
@@ -104,7 +107,7 @@ func New() (*App, error) {
 		cfgMap := appender.NewMapAppender(0, func(v *entity.URLValidatorConfig) string {
 			return v.Type
 		})
-		if err := a.repo.GetAllURLValidatorConfigs(context.Background(), cfgMap); err != nil {
+		if err := a.repo.URLValidatorConfig().GetList(ctx, cfgMap); err != nil {
 			return nil, fmt.Errorf("failed to get URL validator configs from repo: %w", err)
 		}
 
@@ -163,6 +166,22 @@ func New() (*App, error) {
 			WithValidator(validator.NewEchoValidator())
 		a.r = r
 
+		logger := lecho.From(log.With().Str("module", "http").Logger())
+
+		r.Echo.Logger = logger
+		r.Echo.HideBanner = true
+
+		r.Use(echoMiddleware.RequestID())
+
+		r.Use(lecho.Middleware(lecho.Config{
+			Logger:  logger,
+			NestKey: "request",
+			Skipper: func(c echo.Context) bool {
+				return strings.Contains(c.Request().URL.Path, "/swagger")
+			},
+			HandleError: true,
+		}))
+
 		if a.cfg.App.Local {
 			r.Use(echoMiddleware.CORSWithConfig(echoMiddleware.CORSConfig{
 				Skipper:                                  echoMiddleware.DefaultSkipper,
@@ -185,7 +204,7 @@ func New() (*App, error) {
 			r.GET("/swagger/*", echoSwagger.WrapHandler)
 			api := r.Group("/api")
 			{
-				postHandler := echo.NewPostHandler(
+				postHandler := handlers.NewPostHandler(
 					a.ws,
 					a.imageURLValidator,
 					a.textURLValidator,

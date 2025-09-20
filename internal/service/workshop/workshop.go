@@ -4,21 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/rs/zerolog/log"
-	"gorm.io/gorm"
 	"time"
 	"workshop/internal/controller"
 	"workshop/internal/repository"
+	"workshop/internal/repository/common"
 	"workshop/internal/repository/entity"
 	repoErrors "workshop/internal/repository/errors"
+
+	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 type Workshop struct {
-	repo    repository.Repository
+	repo    repository.Driver
 	limiter Limiter
 }
 
-func New(cfg *Config, repo repository.Repository, limiter Limiter) (*Workshop, error) {
+func New(cfg *Config, repo repository.Driver, limiter Limiter) (*Workshop, error) {
 	limiter.RegisterGroup(
 		PostsLimitKey,
 		cfg.PostsLimit,
@@ -35,8 +37,8 @@ func New(cfg *Config, repo repository.Repository, limiter Limiter) (*Workshop, e
 }
 
 func (w *Workshop) GetPosts(ctx context.Context, req *controller.GetPostsRequest) ([]*Post, error) {
-	filter := repository.GetPostsFilter{
-		BaseFilter: repository.BaseFilter{
+	filter := common.GetPostListFilter{
+		BaseFilter: common.BaseFilter{
 			Limit:  int(req.Limit),
 			Offset: int((req.Page - 1) * req.Limit),
 		},
@@ -53,12 +55,12 @@ func (w *Workshop) GetPosts(ctx context.Context, req *controller.GetPostsRequest
 		ForUserID:           req.ForUserID,
 	}
 
-	sortOrder := repository.Order(0)
+	sortOrder := common.Order(0)
 	switch req.SortOrder {
 	case controller.SortOrderAscending:
-		sortOrder = repository.OrderAsc
+		sortOrder = common.OrderAsc
 	case controller.SortOrderDescending:
-		sortOrder = repository.OrderDesc
+		sortOrder = common.OrderDesc
 	}
 
 	switch req.SortType {
@@ -74,7 +76,7 @@ func (w *Workshop) GetPosts(ctx context.Context, req *controller.GetPostsRequest
 		filter.UpdatedAtOrder = sortOrder
 	}
 
-	posts, err := w.repo.GetPosts(ctx, filter)
+	posts, err := w.repo.Posts().GetList(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +89,7 @@ func (w *Workshop) GetPosts(ctx context.Context, req *controller.GetPostsRequest
 }
 
 func (w *Workshop) GetPost(ctx context.Context, req *controller.GetPostRequest) (*Post, error) {
-	filter := repository.GetPostFilter{
+	filter := common.GetPostFilter{
 		PostID:              req.ID,
 		ForUserID:           req.ForUserID,
 		IncludePostContents: true,
@@ -95,7 +97,7 @@ func (w *Workshop) GetPost(ctx context.Context, req *controller.GetPostRequest) 
 		ShowDeclined:        false,
 	}
 
-	post, err := w.repo.GetPost(ctx, filter)
+	post, err := w.repo.Posts().Get(ctx, filter)
 	if err != nil {
 		switch {
 		case errors.Is(err, repoErrors.ErrNotFound):
@@ -150,7 +152,7 @@ func (w *Workshop) CreatePost(ctx context.Context, req *controller.CreatePostReq
 		})
 	}
 
-	if err := w.repo.CreatePostWithContentsAndTags(ctx, post); err != nil {
+	if err := w.repo.Posts().Create(ctx, post); err != nil {
 		return nil, err
 	}
 
@@ -165,7 +167,7 @@ func (w *Workshop) CreatePost(ctx context.Context, req *controller.CreatePostReq
 }
 
 func (w *Workshop) UpdatePost(ctx context.Context, req *controller.UpdatePostRequest) (*Post, error) {
-	post, err := w.repo.GetPost(ctx, repository.GetPostFilter{
+	post, err := w.repo.Posts().Get(ctx, common.GetPostFilter{
 		PostID:       req.PostID,
 		ShowDeclined: true,
 	})
@@ -206,7 +208,7 @@ func (w *Workshop) UpdatePost(ctx context.Context, req *controller.UpdatePostReq
 	}
 	post.Contents = updatedContents
 
-	if err := w.repo.UpdatePost(ctx, post); err != nil {
+	if err := w.repo.Posts().Update(ctx, post); err != nil {
 		switch {
 		case errors.Is(err, repoErrors.ErrNotFound):
 			return nil, errors.Join(ErrNotFound, err)
@@ -219,7 +221,7 @@ func (w *Workshop) UpdatePost(ctx context.Context, req *controller.UpdatePostReq
 }
 
 func (w *Workshop) DeletePost(ctx context.Context, req *controller.DeletePostRequest) error {
-	post, err := w.repo.GetPost(ctx, repository.GetPostFilter{PostID: req.PostID, ShowDeclined: true})
+	post, err := w.repo.Posts().Get(ctx, common.GetPostFilter{PostID: req.PostID, ShowDeclined: true})
 	if err != nil {
 		switch {
 		case errors.Is(err, repoErrors.ErrNotFound):
@@ -233,7 +235,7 @@ func (w *Workshop) DeletePost(ctx context.Context, req *controller.DeletePostReq
 		return ErrPostNotOwned
 	}
 
-	if err := w.repo.DeletePost(ctx, req.PostID, true); err != nil {
+	if err := w.repo.Posts().Delete(ctx, req.PostID, true); err != nil {
 		return err
 	}
 
@@ -241,7 +243,7 @@ func (w *Workshop) DeletePost(ctx context.Context, req *controller.DeletePostReq
 }
 
 func (w *Workshop) FavoritePost(ctx context.Context, req *controller.FavoritePostRequest) error {
-	if err := w.repo.AddPostToFavorites(ctx, &entity.Favorite{
+	if err := w.repo.Favorites().Create(ctx, &entity.Favorite{
 		PostID: req.PostID,
 		UserID: req.UserID,
 	}); err != nil {
@@ -259,7 +261,7 @@ func (w *Workshop) FavoritePost(ctx context.Context, req *controller.FavoritePos
 }
 
 func (w *Workshop) UnfavoritePost(ctx context.Context, req *controller.UnfavoritePostRequest) error {
-	if err := w.repo.RemovePostFromFavoritesByPostAndUser(ctx, &entity.Favorite{
+	if err := w.repo.Favorites().Delete(ctx, &entity.Favorite{
 		PostID: req.PostID,
 		UserID: req.UserID,
 	}); err != nil {
@@ -275,7 +277,7 @@ func (w *Workshop) UnfavoritePost(ctx context.Context, req *controller.Unfavorit
 }
 
 func (w *Workshop) ModeratePost(ctx context.Context, req *controller.ModeratePostRequest) error {
-	if err := w.repo.CreateModerationAction(ctx, &entity.ModerationAction{
+	if err := w.repo.Moderation().Create(ctx, &entity.ModerationAction{
 		PostID:      req.PostID,
 		ModeratorID: req.UserID,
 		Action:      req.Action,
@@ -293,8 +295,8 @@ func (w *Workshop) ModeratePost(ctx context.Context, req *controller.ModeratePos
 }
 
 func (w *Workshop) GetModerationActions(ctx context.Context, req *controller.GetModerationActionsRequest) ([]*ModerationAction, error) {
-	filter := repository.GetModerationActionsFilter{
-		BaseFilter: repository.BaseFilter{
+	filter := common.GetModerationListFilter{
+		BaseFilter: common.BaseFilter{
 			Limit:  int(req.Limit),
 			Offset: int((req.Page - 1) * req.Limit),
 		},
@@ -305,12 +307,12 @@ func (w *Workshop) GetModerationActions(ctx context.Context, req *controller.Get
 	}
 
 	if req.SortOrder == controller.SortOrderAscending {
-		filter.CreatedAtOrder = repository.OrderAsc
+		filter.CreatedAtOrder = common.OrderAsc
 	} else {
-		filter.CreatedAtOrder = repository.OrderDesc
+		filter.CreatedAtOrder = common.OrderDesc
 	}
 
-	moderationActions, err := w.repo.GetModerationActions(ctx, filter)
+	moderationActions, err := w.repo.Moderation().GetList(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +327,7 @@ func (w *Workshop) GetModerationActions(ctx context.Context, req *controller.Get
 
 func (w *Workshop) RatePost(ctx context.Context, req *controller.RatePostRequest) error {
 	if req.Rating == controller.RateActionRetract {
-		if err := w.repo.RemovePostRateByPostAndUser(ctx, &entity.Vote{
+		if err := w.repo.Votes().Delete(ctx, &entity.Vote{
 			PostID:  req.PostID,
 			VoterID: req.UserID,
 		}); err != nil {
@@ -351,7 +353,7 @@ func (w *Workshop) RatePost(ctx context.Context, req *controller.RatePostRequest
 		vote.Vote = -1
 	}
 
-	if err := w.repo.RatePost(ctx, vote); err != nil {
+	if err := w.repo.Votes().Create(ctx, vote); err != nil {
 		switch {
 		case errors.Is(err, repoErrors.ErrNotFound):
 			return ErrPostNotFound
@@ -380,7 +382,7 @@ func (w *Workshop) AddComment(ctx context.Context, req *controller.AddCommentReq
 		Content:  req.Content,
 	}
 
-	if err := w.repo.AddComment(ctx, comment); err != nil {
+	if err := w.repo.Comments().Create(ctx, comment); err != nil {
 		switch {
 		case errors.Is(err, repoErrors.ErrNotFound):
 			return nil, ErrPostNotFound
@@ -400,7 +402,7 @@ func (w *Workshop) AddComment(ctx context.Context, req *controller.AddCommentReq
 }
 
 func (w *Workshop) UpdateComment(ctx context.Context, req *controller.UpdateCommentRequest) (*Comment, error) {
-	comment, err := w.repo.GetCommentByID(ctx, req.CommentID)
+	comment, err := w.repo.Comments().Get(ctx, req.CommentID)
 	if err != nil {
 		switch {
 		case errors.Is(err, repoErrors.ErrNotFound):
@@ -416,7 +418,7 @@ func (w *Workshop) UpdateComment(ctx context.Context, req *controller.UpdateComm
 
 	comment.Content = req.Content
 
-	if err := w.repo.UpdateComment(ctx, comment); err != nil {
+	if err := w.repo.Comments().Update(ctx, comment); err != nil {
 		return nil, err
 	}
 
@@ -424,7 +426,7 @@ func (w *Workshop) UpdateComment(ctx context.Context, req *controller.UpdateComm
 }
 
 func (w *Workshop) DeleteComment(ctx context.Context, req *controller.DeleteCommentRequest) error {
-	comment, err := w.repo.GetCommentByID(ctx, req.CommentID)
+	comment, err := w.repo.Comments().Get(ctx, req.CommentID)
 	if err != nil {
 		switch {
 		case errors.Is(err, repoErrors.ErrNotFound):
@@ -438,7 +440,7 @@ func (w *Workshop) DeleteComment(ctx context.Context, req *controller.DeleteComm
 		return ErrCommentNotOwned
 	}
 
-	if err := w.repo.DeleteComment(ctx, comment); err != nil {
+	if err := w.repo.Comments().Delete(ctx, comment); err != nil {
 		return err
 	}
 
@@ -446,8 +448,8 @@ func (w *Workshop) DeleteComment(ctx context.Context, req *controller.DeleteComm
 }
 
 func (w *Workshop) GetComments(ctx context.Context, req *controller.GetCommentsRequest) ([]*Comment, error) {
-	filter := repository.GetCommentsFilter{
-		BaseFilter: repository.BaseFilter{
+	filter := common.GetCommentsListFilter{
+		BaseFilter: common.BaseFilter{
 			Limit:  int(req.Limit),
 			Offset: int((req.Page - 1) * req.Limit),
 		},
@@ -456,12 +458,12 @@ func (w *Workshop) GetComments(ctx context.Context, req *controller.GetCommentsR
 	}
 
 	if req.SortOrder == controller.SortOrderAscending {
-		filter.CreatedAtOrder = repository.OrderAsc
+		filter.CreatedAtOrder = common.OrderAsc
 	} else {
-		filter.CreatedAtOrder = repository.OrderDesc
+		filter.CreatedAtOrder = common.OrderDesc
 	}
 
-	comments, err := w.repo.GetComments(ctx, filter)
+	comments, err := w.repo.Comments().GetList(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
