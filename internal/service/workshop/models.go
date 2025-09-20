@@ -24,19 +24,20 @@ type PostInteractionData struct {
 
 type Post struct {
 	ID              types.PostID        `json:"id" extensions:"x-order=0"`
-	Title           string              `json:"title" extensions:"x-order=1"`
-	Description     string              `json:"description" extensions:"x-order=2"`
-	PreviewURL      string              `json:"preview_url" extensions:"x-order=3"`
-	PostType        types.PostType      `json:"post_type" extensions:"x-order=4"`
-	Tags            []string            `json:"tags" extensions:"x-order=5"`
-	Contents        []PostContent       `json:"contents" extensions:"x-order=6"`
-	CreatedAt       time.Time           `json:"created_at" extensions:"x-order=7"`
-	UpdatedAt       time.Time           `json:"updated_at" extensions:"x-order=8"`
-	ModerationData  PostModerationData  `json:"moderation_data" extensions:"x-order=9"`
-	InteractionData PostInteractionData `json:"interaction_data" extensions:"x-order=10"`
-	Rating          int                 `json:"rating" extensions:"x-order=11"`
-	CommentsCount   int                 `json:"comments_count" extensions:"x-order=12"`
-	FavoritesCount  int                 `json:"favorites_count" extensions:"x-order=13"`
+	AuthorID        types.UserID        `json:"author_id" extensions:"x-order=1"`
+	Title           string              `json:"title" extensions:"x-order=2"`
+	Description     string              `json:"description" extensions:"x-order=3"`
+	PreviewURL      string              `json:"preview_url" extensions:"x-order=4"`
+	PostType        types.PostType      `json:"post_type" extensions:"x-order=5"`
+	Tags            []string            `json:"tags" extensions:"x-order=6"`
+	Contents        []PostContent       `json:"contents" extensions:"x-order=7"`
+	CreatedAt       time.Time           `json:"created_at" extensions:"x-order=8"`
+	UpdatedAt       time.Time           `json:"updated_at" extensions:"x-order=9"`
+	ModerationData  PostModerationData  `json:"moderation_data" extensions:"x-order=10"`
+	InteractionData PostInteractionData `json:"interaction_data" extensions:"x-order=11"`
+	Rating          int                 `json:"rating" extensions:"x-order=12"`
+	CommentsCount   int                 `json:"comments_count" extensions:"x-order=13"`
+	FavoritesCount  int                 `json:"favorites_count" extensions:"x-order=14"`
 }
 
 type Comment struct {

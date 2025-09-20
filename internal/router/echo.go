@@ -3,8 +3,9 @@ package router
 import (
 	"context"
 	"fmt"
-	"github.com/labstack/echo/v4"
 	"net/http"
+
+	"github.com/labstack/echo/v4"
 )
 
 type EchoRouter struct {
@@ -31,13 +32,6 @@ func (r *EchoRouter) WithValidator(validator echo.Validator) *EchoRouter {
 }
 
 func (r *EchoRouter) Run(port uint16) error {
-	if r.Debug {
-		fmt.Println("Routes:")
-		for _, r := range r.Routes() {
-			fmt.Printf("[%s] %s\n", r.Method, r.Path)
-		}
-	}
-
 	return r.Start(fmt.Sprintf(":%d", port))
 }
 

@@ -12,6 +12,7 @@ var (
 	ErrPostAlreadyFavorite = errors.New("post already favorite")
 	ErrPostNotFavorite     = errors.New("post not favorite")
 	ErrPostNotRated        = errors.New("post not rated")
+	ErrNotFound            = errors.New("not found")
 
 	ErrCommentNotFound = errors.New("comment not found")
 	ErrCommentNotOwned = errors.New("comment not owned")

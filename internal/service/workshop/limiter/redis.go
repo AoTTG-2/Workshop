@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/redis/go-redis/v9"
 	"sync"
 	"time"
 	"workshop/internal/service/workshop"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type RedisLimiter struct {
@@ -69,7 +70,7 @@ func (r *RedisLimiter) Check(ctx context.Context, groupKey, userID string) (work
 	}
 
 	ttl, err := ttlCmd.Result()
-	if err != nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return workshop.RateLimitInfo{}, fmt.Errorf("failed TTL in pipeline: %w", err)
 	}
 

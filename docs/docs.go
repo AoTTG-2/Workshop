@@ -714,7 +714,7 @@ const docTemplate = `{
                         "DebugUserID": []
                     }
                 ],
-                "description": "Updates an existing post.\nThe caller must have the 'POST_CREATOR' role and must be the owner of the post.",
+                "description": "Updates an existing post.\nThe caller must have the 'POST_CREATOR' role and must be the owner of the post.\nLeave content ID 0 to add new content.\nIf content ID is not 0, it will try to update the content.\nWhen updating, excluded contents and tags will be removed.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1316,7 +1316,8 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "description",
-                "title"
+                "title",
+                "type"
             ],
             "properties": {
                 "title": {
@@ -1334,6 +1335,46 @@ const docTemplate = `{
                 "preview_url": {
                     "type": "string",
                     "x-order": "3"
+                },
+                "contents": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "content_data",
+                            "content_type"
+                        ],
+                        "properties": {
+                            "id": {
+                                "type": "integer",
+                                "x-order": "0"
+                            },
+                            "content_type": {
+                                "type": "string",
+                                "x-order": "1"
+                            },
+                            "content_data": {
+                                "type": "string",
+                                "x-order": "2"
+                            },
+                            "is_link": {
+                                "type": "boolean",
+                                "x-order": "3"
+                            }
+                        }
+                    }
+                },
+                "tags": {
+                    "type": "array",
+                    "maxItems": 10,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "type": {
+                    "description": "TODO: RENAME",
+                    "type": "string"
                 }
             }
         },
@@ -1410,63 +1451,9 @@ const docTemplate = `{
                     "type": "integer",
                     "x-order": "0"
                 },
-                "title": {
+                "author_id": {
                     "type": "string",
                     "x-order": "1"
-                },
-                "interaction_data": {
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/workshop_internal_service_workshop.PostInteractionData"
-                        }
-                    ],
-                    "x-order": "10"
-                },
-                "rating": {
-                    "type": "integer",
-                    "x-order": "11"
-                },
-                "comments_count": {
-                    "type": "integer",
-                    "x-order": "12"
-                },
-                "favorites_count": {
-                    "type": "integer",
-                    "x-order": "13"
-                },
-                "description": {
-                    "type": "string",
-                    "x-order": "2"
-                },
-                "preview_url": {
-                    "type": "string",
-                    "x-order": "3"
-                },
-                "post_type": {
-                    "type": "string",
-                    "x-order": "4"
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "x-order": "5"
-                },
-                "contents": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/workshop_internal_service_workshop.PostContent"
-                    },
-                    "x-order": "6"
-                },
-                "created_at": {
-                    "type": "string",
-                    "x-order": "7"
-                },
-                "updated_at": {
-                    "type": "string",
-                    "x-order": "8"
                 },
                 "moderation_data": {
                     "allOf": [
@@ -1474,6 +1461,64 @@ const docTemplate = `{
                             "$ref": "#/definitions/workshop_internal_service_workshop.PostModerationData"
                         }
                     ],
+                    "x-order": "10"
+                },
+                "interaction_data": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/workshop_internal_service_workshop.PostInteractionData"
+                        }
+                    ],
+                    "x-order": "11"
+                },
+                "rating": {
+                    "type": "integer",
+                    "x-order": "12"
+                },
+                "comments_count": {
+                    "type": "integer",
+                    "x-order": "13"
+                },
+                "favorites_count": {
+                    "type": "integer",
+                    "x-order": "14"
+                },
+                "title": {
+                    "type": "string",
+                    "x-order": "2"
+                },
+                "description": {
+                    "type": "string",
+                    "x-order": "3"
+                },
+                "preview_url": {
+                    "type": "string",
+                    "x-order": "4"
+                },
+                "post_type": {
+                    "type": "string",
+                    "x-order": "5"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "x-order": "6"
+                },
+                "contents": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workshop_internal_service_workshop.PostContent"
+                    },
+                    "x-order": "7"
+                },
+                "created_at": {
+                    "type": "string",
+                    "x-order": "8"
+                },
+                "updated_at": {
+                    "type": "string",
                     "x-order": "9"
                 }
             }

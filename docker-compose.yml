@@ -28,6 +28,7 @@ services:
     image: postgres:alpine
     container_name: workshop_postgres
     volumes:
+      - pg_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d
     shm_size: 128mb
     ports:
@@ -90,3 +91,6 @@ networks:
   default:
     name: workshop_network
     driver: bridge
+
+volumes:
+  pg_data:

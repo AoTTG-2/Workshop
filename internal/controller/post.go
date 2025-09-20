@@ -58,15 +58,30 @@ type CreatePostRequest struct {
 		Type   types.ContentType `json:"type" validate:"required" extensions:"x-order=1"`
 		IsLink bool              `json:"is_link" extensions:"x-order=2"`
 	} `json:"contents" validate:"required,min=1" extensions:"x-order=5"`
-	UserID types.UserID `json:"-" extensions:"x-order=6"`
+	UserID types.UserID `json:"-"`
+}
+
+type UpdatePostContentRequest struct {
+	ID          types.PostContentID `json:"id,omitempty"` // 0 => new
+	ContentType types.ContentType   `json:"content_type" validate:"required"`
+	ContentData string              `json:"content_data" validate:"required"`
+	IsLink      bool                `json:"is_link"`
 }
 
 type UpdatePostRequest struct {
-	PostID      types.PostID `json:"-" param:"postID" validate:"required" extensions:"x-order=0"`
-	Title       string       `json:"title" validate:"required,min=1,max=255" extensions:"x-order=1"`
-	Description string       `json:"description" validate:"required,min=1,max=4096" extensions:"x-order=2"`
-	PreviewURL  string       `json:"preview_url" validate:"omitempty,url" extensions:"x-order=3"`
-	UserID      types.UserID `json:"-" extensions:"x-order=4"`
+	PostID      types.PostID   `json:"-" param:"postID" validate:"required" extensions:"x-order=0"`
+	Title       string         `json:"title" validate:"required,min=1,max=255"  extensions:"x-order=1"`
+	Description string         `json:"description" validate:"required,min=1,max=4096" extensions:"x-order=2"`
+	PreviewURL  string         `json:"preview_url" validate:"omitempty,url" extensions:"x-order=3"`
+	Type        types.PostType `json:"type" validate:"required"`
+	Tags        []string       `json:"tags" validate:"omitempty,unique,max=10"`
+	Contents    []struct {
+		ID          types.PostContentID `json:"id,omitempty" extensions:"x-order=0"`
+		ContentType types.ContentType   `json:"content_type" validate:"required" extensions:"x-order=1"`
+		ContentData string              `json:"content_data" validate:"required" extensions:"x-order=2"`
+		IsLink      bool                `json:"is_link" extensions:"x-order=3"`
+	} `json:"contents"`
+	UserID types.UserID `json:"-"`
 }
 
 type DeletePostRequest struct {

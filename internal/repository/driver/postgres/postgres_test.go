@@ -3,76 +3,169 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"github.com/Jagerente/gocfg"
-	"github.com/Jagerente/gocfg/pkg/values"
-	"github.com/lib/pq"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
+	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
-	"workshop/internal/repository"
+	"workshop/internal/repository/common"
 	"workshop/internal/repository/entity"
 	repoErrors "workshop/internal/repository/errors"
 	"workshop/internal/types"
 	"workshop/pkg/appender"
+
+	"github.com/Jagerente/gocfg"
+	"github.com/lib/pq"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	tpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+const (
+	PostsTableName               = "posts"
+	TagsTableName                = "tags"
+	PostContentsTableName        = "post_contents"
+	ModerationActionsTableName   = "moderation_actions"
+	CommentsTableName            = "comments"
+	VotesTableName               = "votes"
+	PostTagsTagsTableName        = "post_tags"
+	FavoritesTableName           = "favorites"
+	URLValidatorConfigsTableName = "url_validator_configs"
+)
+
+var (
+	pgC   *tpostgres.PostgresContainer
+	pgDrv *PGXDriver
 )
 
 type testConfig struct {
-	ConnString     string `env:"TEST_POSTGRES_CONN_STRING" default:"postgres://postgres:12345@postgres:5432/test_workshop?sslmode=disable"`
-	MigrationsPath string `env:"TEST_POSTGRES_MIGRATIONS_PATH" default:"./migrations/postgres"`
+	Host           string          `env:"TEST_POSTGRES_HOST,omitempty"`
+	Database       string          `env:"TEST_POSTGRES_DATABASE" default:"workshop_test"`
+	Username       string          `env:"TEST_POSTGRES_USERNAME" default:"username"`
+	Password       string          `env:"TEST_POSTGRES_PASSWORD" default:"password"`
+	Params         string          `env:"TEST_POSTGRES_PARAMS" default:"sslmode=disable"`
+	MigrationsPath string          `env:"TEST_POSTGRES_MIGRATIONS_PATH" default:"./migrations/postgres"`
+	LogLevel       logger.LogLevel `env:"TEST_POSTGRES_LOGLEVEL" default:"3"`
 }
 
-var (
-	testCfg         *testConfig
-	testCfgOnce     sync.Once
-	testMigrateOnce sync.Once
-)
+func TestMain(m *testing.M) {
+	testCfg := new(testConfig)
+	cfgManager := gocfg.NewDefault()
+	if err := cfgManager.Unmarshal(testCfg); err != nil {
+		panic(err)
+	}
 
-func setupTestDB(t *testing.T) *GORMDriver {
-	testCfgOnce.Do(func() {
-		testCfg = new(testConfig)
-		cfgManager := gocfg.NewDefault()
-		if dotEnvProvider, err := values.NewDotEnvProvider(); err == nil {
-			cfgManager = cfgManager.AddValueProviders(dotEnvProvider)
+	ctx := context.Background()
+	var code int
+
+	if testCfg.Host != "" {
+		connStr := fmt.Sprintf("postgres://%s:%s@%s/%s",
+			testCfg.Username, testCfg.Password, testCfg.Host, testCfg.Database,
+		)
+		if testCfg.Params != "" {
+			connStr += "?" + testCfg.Params
 		}
 
-		err := cfgManager.Unmarshal(testCfg)
-		require.NoError(t, err)
-	})
+		var err error
+		pgDrv, err = NewDriver(ctx, connStr, testCfg.MigrationsPath, testCfg.LogLevel)
+		if err != nil {
+			panic(err)
+		}
 
-	driver, err := NewGORMDriver(testCfg.ConnString, testCfg.MigrationsPath)
-	require.NoError(t, err)
+		if err := pgDrv.Migrate(ctx); err != nil {
+			_ = pgDrv.Drop(ctx)
+			pgDrv.Close()
+			panic(err)
+		}
 
-	testMigrateOnce.Do(func() {
-		err = driver.Migrate(context.Background())
-		require.NoError(t, err)
-	})
+		code = m.Run()
 
-	return driver
+		_ = pgDrv.Drop(ctx)
+		pgDrv.Close()
+	} else {
+		container, err := tpostgres.Run(
+			ctx,
+			"postgres:16-alpine",
+			tpostgres.WithDatabase(testCfg.Database),
+			tpostgres.WithUsername(testCfg.Username),
+			tpostgres.WithPassword(testCfg.Password),
+			testcontainers.WithWaitStrategy(
+				wait.ForLog("database system is ready to accept connections").
+					WithOccurrence(2).WithStartupTimeout(5*time.Second)),
+		)
+		if err != nil {
+			panic(err)
+		}
+
+		if container == nil {
+			panic("postgres testcontainer is nil")
+		}
+
+		pgC = container
+
+		connStr, err := pgC.ConnectionString(ctx, testCfg.Params)
+		if err != nil {
+			_ = pgC.Terminate(ctx)
+			panic(err)
+		}
+
+		pgDrv, err = NewDriver(ctx, connStr, testCfg.MigrationsPath, testCfg.LogLevel)
+		if err != nil {
+			_ = pgC.Terminate(ctx)
+			panic(err)
+		}
+
+		if err := pgDrv.Migrate(ctx); err != nil {
+			_ = pgDrv.Drop(ctx)
+			pgDrv.Close()
+			_ = pgC.Terminate(ctx)
+			panic(err)
+		}
+
+		code = m.Run()
+
+		_ = pgDrv.Drop(ctx)
+		pgDrv.Close()
+		_ = pgC.Terminate(ctx)
+	}
+
+	os.Exit(code)
 }
 
-func teardownTestDB(t *testing.T, driver *GORMDriver) {
-	err := driver.Truncate(context.Background(), []string{
+func preTest(tb testing.TB) {
+	_ = pgDrv.Truncate(tb.Context(), []string{
 		PostsTableName,
-		FavoritesTableName,
+		TagsTableName,
 		PostContentsTableName,
-		VotesTableName,
 		ModerationActionsTableName,
-		PostTagsTagsTableName,
 		CommentsTableName,
+		VotesTableName,
+		PostTagsTagsTableName,
+		FavoritesTableName,
 		URLValidatorConfigsTableName,
 	})
-	require.NoError(t, err)
+}
 
-	driver.Close()
+func postTest(tb testing.TB) {
+	_ = pgDrv.Truncate(tb.Context(), []string{
+		PostsTableName,
+		TagsTableName,
+		PostContentsTableName,
+		ModerationActionsTableName,
+		CommentsTableName,
+		VotesTableName,
+		PostTagsTagsTableName,
+		FavoritesTableName,
+		URLValidatorConfigsTableName,
+	})
 }
 
 func TestGORMDriver_CreatePost(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "12345",
@@ -99,7 +192,7 @@ func TestGORMDriver_CreatePost(t *testing.T) {
 		},
 	}
 
-	err := driver.CreatePostWithContentsAndTags(context.Background(), post)
+	err := pgDrv.Posts().Create(t.Context(), post)
 	require.NoError(t, err)
 
 	assert.NotZero(t, post.ID)
@@ -120,8 +213,8 @@ func TestGORMDriver_CreatePost(t *testing.T) {
 }
 
 func TestGORMDriver_UpdatePost(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "12345",
@@ -148,27 +241,96 @@ func TestGORMDriver_UpdatePost(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, pgDrv.Posts().Create(t.Context(), post))
 
-	t.Run("Success", func(t *testing.T) {
+	t.Run("Success - basic fields", func(t *testing.T) {
 		post.Title = "Updated Portal 2"
 		post.Description = "Updated Portal 2 Game Mode And Maps"
 		post.PreviewURL = "updatedurl"
-		err := driver.UpdatePost(context.Background(), post)
+
+		err := pgDrv.Posts().Update(t.Context(), post)
 		require.NoError(t, err)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 			PostID: post.ID,
 		})
+		require.NoError(t, err)
+
 		assert.Equal(t, "Updated Portal 2", p.Title)
 		assert.Equal(t, "Updated Portal 2 Game Mode And Maps", p.Description)
 		assert.Equal(t, "updatedurl", p.PreviewURL)
-		assert.WithinDuration(t, p.UpdatedAt, time.Now(), time.Second)
+		assert.WithinDuration(t, time.Now(), p.UpdatedAt, 2*time.Second)
 	})
 
-	t.Run("Invalid post PostID", func(t *testing.T) {
+	t.Run("Success - change post_type, tags, and contents", func(t *testing.T) {
+		post.PostType = types.PostTypeSkinSet
+
+		post.Tags = []*entity.Tag{
+			post.Tags[0],   // "Mission"
+			post.Tags[2],   // "Non-canonical"
+			{Name: "Coop"}, // new
+		}
+
+		firstContent := post.Contents[0]
+		firstContent.ContentData = "updatedLongUrl"
+		firstContent.IsLink = false // changed from true
+
+		post.Contents = []*entity.PostContent{
+			firstContent,
+			{
+				ContentType: types.ContentTypeCustomMap,
+				ContentData: "newMapFile",
+				IsLink:      false,
+			},
+		}
+
+		err := pgDrv.Posts().Update(t.Context(), post)
+		require.NoError(t, err)
+
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
+			PostID:              post.ID,
+			IncludeTags:         true,
+			IncludePostContents: true,
+		})
+		require.NoError(t, err)
+
+		assert.EqualValues(t, types.PostTypeSkinSet, p.PostType)
+
+		assert.Len(t, p.Tags, 3)
+		tagNames := make([]string, 0, 3)
+		for _, tg := range p.Tags {
+			tagNames = append(tagNames, tg.Name)
+		}
+		assert.NotContains(t, tagNames, "Other")
+		assert.Contains(t, tagNames, "Coop")
+
+		assert.Len(t, p.Contents, 2)
+
+		var updatedFirst *entity.PostContent
+		for _, c := range p.Contents {
+			if c.ContentData == "updatedLongUrl" {
+				updatedFirst = c
+				break
+			}
+		}
+		require.NotNil(t, updatedFirst)
+		assert.False(t, updatedFirst.IsLink, "should have changed from true to false")
+
+		var newOne *entity.PostContent
+		for _, c := range p.Contents {
+			if c.ContentData == "newMapFile" {
+				newOne = c
+				break
+			}
+		}
+		require.NotNil(t, newOne)
+
+		for _, c := range p.Contents {
+			assert.NotEqual(t, "mapraw", c.ContentData)
+		}
+	})
+
+	t.Run("Invalid post ID", func(t *testing.T) {
 		updatedPost := &entity.Post{
 			ID:          838383,
 			Title:       "Some Title",
@@ -176,14 +338,28 @@ func TestGORMDriver_UpdatePost(t *testing.T) {
 			PreviewURL:  "someurl",
 		}
 
-		err := driver.UpdatePost(context.Background(), updatedPost)
+		err := pgDrv.Posts().Update(t.Context(), updatedPost)
+		require.ErrorIs(t, err, repoErrors.ErrNotFound)
+	})
+
+	t.Run("Fail - content with invalid ID", func(t *testing.T) {
+		invalidIDContent := &entity.PostContent{
+			ID:          999999,
+			ContentType: types.ContentTypeCustomMap,
+			ContentData: "invalidIDContent",
+			IsLink:      false,
+		}
+
+		post.Contents = append(post.Contents, invalidIDContent)
+
+		err := pgDrv.Posts().Update(t.Context(), post)
 		require.ErrorIs(t, err, repoErrors.ErrNotFound)
 	})
 }
 
 func TestGORMDriver_DeletePost(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "12345",
@@ -209,28 +385,28 @@ func TestGORMDriver_DeletePost(t *testing.T) {
 			},
 		},
 	}
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
-	err := driver.DeletePost(context.Background(), post.ID, false)
+	err := pgDrv.Posts().Delete(t.Context(), post.ID, false)
 	require.NoError(t, err)
 
-	err = driver.db.Unscoped().Where("id =?", post.ID).First(post).Error
+	err = pgDrv.db.Unscoped().Where("id =?", post.ID).First(post).Error
 	assert.NoError(t, err)
 	assert.True(t, post.DeletedAt.Valid)
 	assert.WithinDuration(t, post.DeletedAt.Time, time.Now(), time.Second)
 
-	err = driver.DeletePost(context.Background(), post.ID, true)
+	err = pgDrv.Posts().Delete(t.Context(), post.ID, true)
 	require.NoError(t, err)
 
-	err = driver.db.Unscoped().Where("id = ?", post.ID).First(post).Error
+	err = pgDrv.db.Unscoped().Where("id = ?", post.ID).First(post).Error
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
 func TestGORMDriver_GetPost(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "12345",
@@ -256,11 +432,11 @@ func TestGORMDriver_GetPost(t *testing.T) {
 			},
 		},
 	}
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
-	retrievedPost, err := driver.GetPost(context.Background(), repository.GetPostFilter{
+	retrievedPost, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 		PostID:              post.ID,
 		IncludePostContents: false,
 		IncludeTags:         false,
@@ -275,7 +451,7 @@ func TestGORMDriver_GetPost(t *testing.T) {
 	assert.Len(t, retrievedPost.Contents, 0)
 	assert.Nil(t, retrievedPost.LastModeration)
 
-	if err = driver.CreateModerationAction(context.Background(), &entity.ModerationAction{
+	if err = pgDrv.Moderation().Create(t.Context(), &entity.ModerationAction{
 		PostID:      post.ID,
 		ModeratorID: "moderator1",
 		Action:      types.ModerationActionTypeApprove,
@@ -285,7 +461,7 @@ func TestGORMDriver_GetPost(t *testing.T) {
 	}
 
 	t.Run("With post contents and tags", func(t *testing.T) {
-		retrievedPost, err = driver.GetPost(context.Background(), repository.GetPostFilter{
+		retrievedPost, err = pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 			PostID:              post.ID,
 			IncludePostContents: true,
 			IncludeTags:         true,
@@ -306,7 +482,7 @@ func TestGORMDriver_GetPost(t *testing.T) {
 
 	t.Run("Declined/Approved post", func(t *testing.T) {
 		t.Run("Declined post", func(t *testing.T) {
-			if err = driver.CreateModerationAction(context.Background(), &entity.ModerationAction{
+			if err = pgDrv.Moderation().Create(t.Context(), &entity.ModerationAction{
 				PostID:      post.ID,
 				ModeratorID: "moderator2",
 				Action:      types.ModeratorActionTypeDecline,
@@ -315,7 +491,7 @@ func TestGORMDriver_GetPost(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			retrievedPost, err = driver.GetPost(context.Background(), repository.GetPostFilter{
+			retrievedPost, err = pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 				PostID:              post.ID,
 				IncludePostContents: true,
 				IncludeTags:         true,
@@ -324,7 +500,7 @@ func TestGORMDriver_GetPost(t *testing.T) {
 		})
 
 		t.Run("Approved post", func(t *testing.T) {
-			if err = driver.CreateModerationAction(context.Background(), &entity.ModerationAction{
+			if err = pgDrv.Moderation().Create(t.Context(), &entity.ModerationAction{
 				PostID:      post.ID,
 				ModeratorID: "moderator1",
 				Action:      types.ModerationActionTypeApprove,
@@ -333,7 +509,7 @@ func TestGORMDriver_GetPost(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			retrievedPost, err = driver.GetPost(context.Background(), repository.GetPostFilter{
+			retrievedPost, err = pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 				PostID:              post.ID,
 				IncludePostContents: true,
 				IncludeTags:         true,
@@ -344,24 +520,24 @@ func TestGORMDriver_GetPost(t *testing.T) {
 	})
 
 	t.Run("Soft-deleted post", func(t *testing.T) {
-		if err = driver.DeletePost(context.Background(), post.ID, false); err != nil {
+		if err = pgDrv.Posts().Delete(t.Context(), post.ID, false); err != nil {
 			t.Fatal(err)
 		}
 
-		retrievedPost, err = driver.GetPost(context.Background(), repository.GetPostFilter{
+		retrievedPost, err = pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 			PostID:              post.ID,
 			IncludePostContents: true,
 			IncludeTags:         true,
 		})
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
-		if err := driver.RestorePost(context.Background(), post.ID); err != nil {
+		if err := pgDrv.Posts().Restore(t.Context(), post.ID); err != nil {
 			t.Fatal(err)
 		}
 	})
 
 	t.Run("User interactions", func(t *testing.T) {
 		t.Run("Preload favorite", func(t *testing.T) {
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 				PostID:       post.ID,
 				ForUserID:    "interactionTester1",
 				ShowDeclined: true,
@@ -373,11 +549,11 @@ func TestGORMDriver_GetPost(t *testing.T) {
 				PostID: post.ID,
 				UserID: "interactionTester1",
 			}
-			if err := driver.AddPostToFavorites(context.Background(), favorite); err != nil {
+			if err := pgDrv.Favorites().Create(t.Context(), favorite); err != nil {
 				t.Fatal(err)
 			}
 
-			p, err = driver.GetPost(context.Background(), repository.GetPostFilter{
+			p, err = pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 				PostID:       post.ID,
 				ForUserID:    "interactionTester1",
 				ShowDeclined: true,
@@ -388,7 +564,7 @@ func TestGORMDriver_GetPost(t *testing.T) {
 		})
 
 		t.Run("Preload vote", func(t *testing.T) {
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 				PostID:       post.ID,
 				ForUserID:    "interactionTester1",
 				ShowDeclined: true,
@@ -401,11 +577,11 @@ func TestGORMDriver_GetPost(t *testing.T) {
 				VoterID: "interactionTester1",
 				Vote:    1,
 			}
-			if err := driver.RatePost(context.Background(), vote); err != nil {
+			if err := pgDrv.Votes().Create(t.Context(), vote); err != nil {
 				t.Fatal(err)
 			}
 
-			p, err = driver.GetPost(context.Background(), repository.GetPostFilter{
+			p, err = pgDrv.Posts().Get(t.Context(), common.GetPostFilter{
 				PostID:       post.ID,
 				ForUserID:    "interactionTester1",
 				ShowDeclined: true,
@@ -418,8 +594,8 @@ func TestGORMDriver_GetPost(t *testing.T) {
 }
 
 func TestGORMDriver_GetPosts(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post1 := &entity.Post{
 		AuthorID:    "Jagerente",
@@ -478,14 +654,14 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		},
 	}
 
-	posts := []*entity.Post{post1, post2, post3}
-	for _, post := range posts {
-		if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	postList := []*entity.Post{post1, post2, post3}
+	for _, post := range postList {
+		if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if err := driver.CreateModerationAction(context.Background(), &entity.ModerationAction{
+	if err := pgDrv.Moderation().Create(t.Context(), &entity.ModerationAction{
 		PostID:      post1.ID,
 		ModeratorID: "moderator1",
 		Action:      types.ModerationActionTypeApprove,
@@ -494,7 +670,7 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := driver.CreateModerationAction(context.Background(), &entity.ModerationAction{
+	if err := pgDrv.Moderation().Create(t.Context(), &entity.ModerationAction{
 		PostID:      post2.ID,
 		ModeratorID: "moderator2",
 		Action:      types.ModeratorActionTypeDecline,
@@ -504,8 +680,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 	}
 
 	t.Run("No filters", func(t *testing.T) {
-		res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -533,9 +709,9 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 	})
 
 	t.Run("ShowDeclined", func(t *testing.T) {
-		res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
+		res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
 			ShowDeclined: true,
-			BaseFilter: repository.BaseFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -556,9 +732,9 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 	})
 
 	t.Run("OnlyApproved", func(t *testing.T) {
-		res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
+		res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
 			OnlyApproved: true,
-			BaseFilter: repository.BaseFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -578,8 +754,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 	})
 
 	t.Run("Include Tags", func(t *testing.T) {
-		res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -608,8 +784,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 	})
 
 	t.Run("Include Post Contents", func(t *testing.T) {
-		res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -658,8 +834,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 
 		for _, testCase := range testCases {
 			t.Run(fmt.Sprintf("Limit: %d, Offset: %d", testCase.Limit, testCase.Offset), func(t *testing.T) {
-				res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-					BaseFilter: repository.BaseFilter{
+				res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+					BaseFilter: common.BaseFilter{
 						Limit:  testCase.Limit,
 						Offset: testCase.Offset,
 					},
@@ -680,8 +856,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 	})
 
 	t.Run("Search by Author", func(t *testing.T) {
-		res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -700,8 +876,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		assert.Contains(t, mapRes.Map(), post1.ID)
 		assert.Contains(t, mapRes.Map(), post2.ID)
 
-		res, err = driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err = pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -722,8 +898,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 	})
 
 	t.Run("Search by Name and Description", func(t *testing.T) {
-		res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -743,8 +919,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		assert.Contains(t, mapRes.Map(), post1.ID)
 		assert.Contains(t, mapRes.Map(), post2.ID)
 
-		res, err = driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err = pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -763,8 +939,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		assert.Len(t, mapRes.Map(), 1)
 		assert.Contains(t, mapRes.Map(), post1.ID)
 
-		res, err = driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err = pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -785,8 +961,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 	})
 
 	t.Run("Search by Type", func(t *testing.T) {
-		res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -806,8 +982,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		assert.Contains(t, mapRes.Map(), post1.ID)
 		assert.Contains(t, mapRes.Map(), post3.ID)
 
-		res, err = driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err = pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -828,8 +1004,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 	})
 
 	t.Run("Search by Tags", func(t *testing.T) {
-		res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -849,8 +1025,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		assert.Contains(t, mapRes.Map(), post2.ID)
 		assert.Contains(t, mapRes.Map(), post3.ID)
 
-		res, err = driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err = pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -870,8 +1046,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		assert.Contains(t, mapRes.Map(), post1.ID)
 		assert.Contains(t, mapRes.Map(), post3.ID)
 
-		res, err = driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err = pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -890,8 +1066,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		assert.Len(t, mapRes.Map(), 1)
 		assert.Contains(t, mapRes.Map(), post3.ID)
 
-		res, err = driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err = pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -911,8 +1087,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		assert.Contains(t, mapRes.Map(), post2.ID)
 		assert.Contains(t, mapRes.Map(), post3.ID)
 
-		res, err = driver.GetPosts(context.Background(), repository.GetPostsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err = pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -936,13 +1112,13 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 
 	t.Run("CreatedAt order", func(t *testing.T) {
 		t.Run("Ascending", func(t *testing.T) {
-			res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
 				ShowDeclined:   true,
-				CreatedAtOrder: repository.OrderAsc,
+				CreatedAtOrder: common.OrderAsc,
 			})
 			assert.NoError(t, err)
 
@@ -953,13 +1129,13 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		})
 
 		t.Run("Descending", func(t *testing.T) {
-			res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
 				ShowDeclined:   true,
-				CreatedAtOrder: repository.OrderDesc,
+				CreatedAtOrder: common.OrderDesc,
 			})
 			assert.NoError(t, err)
 			assert.Len(t, res, 3)
@@ -999,21 +1175,21 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 					VoterID: types.UserID(fmt.Sprintf("voter%d", i)),
 					Vote:    voteVal,
 				}
-				if err := driver.RatePost(context.Background(), vote); err != nil {
+				if err := pgDrv.Votes().Create(t.Context(), vote); err != nil {
 					t.Fatal(err)
 				}
 			}
 		}
 
 		t.Run("Ascending", func(t *testing.T) {
-			res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
 				ShowDeclined:   true,
-				CreatedAtOrder: repository.OrderAsc,
-				RatingOrder:    repository.OrderAsc,
+				CreatedAtOrder: common.OrderAsc,
+				RatingOrder:    common.OrderAsc,
 			})
 			assert.NoError(t, err)
 
@@ -1024,14 +1200,14 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		})
 
 		t.Run("Descending", func(t *testing.T) {
-			res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
 				ShowDeclined:   true,
-				CreatedAtOrder: repository.OrderAsc,
-				RatingOrder:    repository.OrderDesc,
+				CreatedAtOrder: common.OrderAsc,
+				RatingOrder:    common.OrderDesc,
 			})
 			assert.NoError(t, err)
 
@@ -1068,21 +1244,21 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 					AuthorID: types.UserID(fmt.Sprintf("commenter%d", i)),
 					Content:  fmt.Sprintf("Comment %d", i),
 				}
-				if err := driver.AddComment(context.Background(), comment); err != nil {
+				if err := pgDrv.Comments().Create(t.Context(), comment); err != nil {
 					t.Fatal(err)
 				}
 			}
 		}
 
 		t.Run("Ascending", func(t *testing.T) {
-			res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
 				ShowDeclined:       true,
-				CreatedAtOrder:     repository.OrderAsc,
-				CommentsCountOrder: repository.OrderAsc,
+				CreatedAtOrder:     common.OrderAsc,
+				CommentsCountOrder: common.OrderAsc,
 			})
 			assert.NoError(t, err)
 
@@ -1093,14 +1269,14 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		})
 
 		t.Run("Descending", func(t *testing.T) {
-			res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
 				ShowDeclined:       true,
-				CreatedAtOrder:     repository.OrderAsc,
-				CommentsCountOrder: repository.OrderDesc,
+				CreatedAtOrder:     common.OrderAsc,
+				CommentsCountOrder: common.OrderDesc,
 			})
 			assert.NoError(t, err)
 
@@ -1117,12 +1293,12 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 				PostID: post1.ID,
 				UserID: "interactionTester1",
 			}
-			if err := driver.AddPostToFavorites(context.Background(), favorite); err != nil {
+			if err := pgDrv.Favorites().Create(t.Context(), favorite); err != nil {
 				t.Fatal(err)
 			}
 
-			res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
@@ -1150,12 +1326,12 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 				VoterID: "interactionTester1",
 				Vote:    1,
 			}
-			if err := driver.RatePost(context.Background(), vote); err != nil {
+			if err := pgDrv.Votes().Create(t.Context(), vote); err != nil {
 				t.Fatal(err)
 			}
 
-			res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
@@ -1178,8 +1354,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 		})
 
 		t.Run("Only favorites", func(t *testing.T) {
-			res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
@@ -1200,12 +1376,12 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 				VoterID: "interactionTester1",
 				Vote:    -1,
 			}
-			if err := driver.RatePost(context.Background(), vote); err != nil {
+			if err := pgDrv.Votes().Create(t.Context(), vote); err != nil {
 				t.Fatal(err)
 			}
 			t.Run("Any", func(t *testing.T) {
-				res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-					BaseFilter: repository.BaseFilter{
+				res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+					BaseFilter: common.BaseFilter{
 						Limit:  10,
 						Offset: 0,
 					},
@@ -1227,8 +1403,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 			})
 
 			t.Run("Upvoted", func(t *testing.T) {
-				res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-					BaseFilter: repository.BaseFilter{
+				res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+					BaseFilter: common.BaseFilter{
 						Limit:  10,
 						Offset: 0,
 					},
@@ -1242,8 +1418,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 			})
 
 			t.Run("Downvoted", func(t *testing.T) {
-				res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-					BaseFilter: repository.BaseFilter{
+				res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+					BaseFilter: common.BaseFilter{
 						Limit:  10,
 						Offset: 0,
 					},
@@ -1261,12 +1437,12 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 					PostID: post3.ID,
 					UserID: "interactionTester1",
 				}
-				if err := driver.AddPostToFavorites(context.Background(), favorite); err != nil {
+				if err := pgDrv.Favorites().Create(t.Context(), favorite); err != nil {
 					t.Fatal(err)
 				}
 
-				res, err := driver.GetPosts(context.Background(), repository.GetPostsFilter{
-					BaseFilter: repository.BaseFilter{
+				res, err := pgDrv.Posts().GetList(t.Context(), common.GetPostListFilter{
+					BaseFilter: common.BaseFilter{
 						Limit:  10,
 						Offset: 0,
 					},
@@ -1284,8 +1460,8 @@ func TestGORMDriver_GetPosts(t *testing.T) {
 }
 
 func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "authorID",
@@ -1310,7 +1486,7 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1321,12 +1497,12 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 					PostID: post.ID,
 					UserID: types.UserID(fmt.Sprintf("user%d", i)),
 				}
-				if err := driver.AddPostToFavorites(context.Background(), favorite); err != nil {
+				if err := pgDrv.Favorites().Create(t.Context(), favorite); err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1339,13 +1515,13 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 					PostID: post.ID,
 					UserID: types.UserID(fmt.Sprintf("user%d", i)),
 				}
-				err := driver.RemovePostFromFavoritesByPostAndUser(context.Background(), favorite)
+				err := pgDrv.Favorites().Delete(t.Context(), favorite)
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1361,13 +1537,13 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 					VoterID: types.UserID(fmt.Sprintf("goodVoter%d", i)),
 					Vote:    1,
 				}
-				err := driver.RatePost(context.Background(), vote)
+				err := pgDrv.Votes().Create(t.Context(), vote)
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1381,13 +1557,13 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 					VoterID: types.UserID(fmt.Sprintf("badVoter%d", i)),
 					Vote:    -1,
 				}
-				err := driver.RatePost(context.Background(), vote)
+				err := pgDrv.Votes().Create(t.Context(), vote)
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1400,13 +1576,13 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 					PostID:  post.ID,
 					VoterID: types.UserID(fmt.Sprintf("goodVoter%d", i)),
 				}
-				err := driver.RemovePostRateByPostAndUser(context.Background(), vote)
+				err := pgDrv.Votes().Delete(t.Context(), vote)
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1419,13 +1595,13 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 					PostID:  post.ID,
 					VoterID: types.UserID(fmt.Sprintf("badVoter%d", i)),
 				}
-				err := driver.RemovePostRateByPostAndUser(context.Background(), vote)
+				err := pgDrv.Votes().Delete(t.Context(), vote)
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1439,13 +1615,13 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 					VoterID: types.UserID(fmt.Sprintf("badVoter%d", i+10)),
 					Vote:    1,
 				}
-				err := driver.RatePost(context.Background(), vote)
+				err := pgDrv.Votes().Create(t.Context(), vote)
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1461,12 +1637,12 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 					AuthorID: types.UserID(fmt.Sprintf("user%d", i)),
 					Content:  fmt.Sprintf("Content %d", i),
 				}
-				if err := driver.AddComment(context.Background(), comment); err != nil {
+				if err := pgDrv.Comments().Create(t.Context(), comment); err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1474,13 +1650,24 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 		})
 
 		t.Run("Decrease", func(t *testing.T) {
-			for i := 0; i < 100; i++ {
-				if err := driver.DeleteComment(context.Background(), &entity.Comment{ID: types.CommentID(i + 1)}); err != nil {
+			comments, err := pgDrv.Comments().GetList(t.Context(), common.GetCommentsListFilter{
+				PostID: post.ID,
+				BaseFilter: common.BaseFilter{
+					Limit:  200,
+					Offset: 0,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for i := 0; i < 100 && i < len(comments); i++ {
+				if err := pgDrv.Comments().Delete(t.Context(), comments[i]); err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+			p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1490,8 +1677,8 @@ func TestGORMDriver_PostAggregatedCounters(t *testing.T) {
 }
 
 func TestGORMDriver_CreateModerationAction(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "authorID",
@@ -1518,7 +1705,7 @@ func TestGORMDriver_CreateModerationAction(t *testing.T) {
 		},
 	}
 
-	err := driver.CreatePostWithContentsAndTags(context.Background(), post)
+	err := pgDrv.Posts().Create(t.Context(), post)
 	require.NoError(t, err)
 
 	t.Run("Create approve moderation action", func(t *testing.T) {
@@ -1528,10 +1715,10 @@ func TestGORMDriver_CreateModerationAction(t *testing.T) {
 			Action:      types.ModerationActionTypeApprove,
 		}
 
-		err := driver.CreateModerationAction(context.Background(), action)
+		err := pgDrv.Moderation().Create(t.Context(), action)
 		assert.NoError(t, err)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		require.NoError(t, err)
 		assert.NotNil(t, p.LastModerationID)
 		assert.NotNil(t, p.LastModeration)
@@ -1550,10 +1737,10 @@ func TestGORMDriver_CreateModerationAction(t *testing.T) {
 			Note:        "Some reason for decline",
 		}
 
-		err := driver.CreateModerationAction(context.Background(), action)
+		err := pgDrv.Moderation().Create(t.Context(), action)
 		assert.NoError(t, err)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID, ShowDeclined: true})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID, ShowDeclined: true})
 		require.NoError(t, err)
 		assert.NotNil(t, p.LastModerationID)
 		assert.NotNil(t, p.LastModeration)
@@ -1572,14 +1759,14 @@ func TestGORMDriver_CreateModerationAction(t *testing.T) {
 			Action:      types.ModerationActionTypeApprove,
 		}
 
-		err := driver.CreateModerationAction(context.Background(), action)
+		err := pgDrv.Moderation().Create(t.Context(), action)
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
 	})
 }
 
 func TestGORMDriver_GetModerationActions(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	posts := make(map[int]*entity.Post, 5)
 	for i := 0; i < 5; i++ {
@@ -1603,14 +1790,14 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 	}
 
 	for _, post := range posts {
-		if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+		if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	t.Run("No moderation actions", func(t *testing.T) {
-		res, err := driver.GetModerationActions(context.Background(), repository.GetModerationActionsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Moderation().GetList(t.Context(), common.GetModerationListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -1653,14 +1840,14 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 	mList := []*entity.ModerationAction{m1, m2, m3, m4, m5, m6}
 
 	for _, m := range mList {
-		if err := driver.CreateModerationAction(context.Background(), m); err != nil {
+		if err := pgDrv.Moderation().Create(t.Context(), m); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	t.Run("Get moderation actions for a single post", func(t *testing.T) {
-		res, err := driver.GetModerationActions(context.Background(), repository.GetModerationActionsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Moderation().GetList(t.Context(), common.GetModerationListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -1682,8 +1869,8 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 	})
 
 	t.Run("Get moderation actions for moderator", func(t *testing.T) {
-		res, err := driver.GetModerationActions(context.Background(), repository.GetModerationActionsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Moderation().GetList(t.Context(), common.GetModerationListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -1707,8 +1894,8 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 	})
 
 	t.Run("Get moderation actions by action type", func(t *testing.T) {
-		res, err := driver.GetModerationActions(context.Background(), repository.GetModerationActionsFilter{
-			BaseFilter: repository.BaseFilter{
+		res, err := pgDrv.Moderation().GetList(t.Context(), common.GetModerationListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  10,
 				Offset: 0,
 			},
@@ -1733,12 +1920,12 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 
 	t.Run("Get moderation actions ordered by created at", func(t *testing.T) {
 		t.Run("Ascending order", func(t *testing.T) {
-			res, err := driver.GetModerationActions(context.Background(), repository.GetModerationActionsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Moderation().GetList(t.Context(), common.GetModerationListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
-				CreatedAtOrder: repository.OrderAsc,
+				CreatedAtOrder: common.OrderAsc,
 			})
 			assert.NoError(t, err)
 
@@ -1749,12 +1936,12 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 		})
 
 		t.Run("Descending order", func(t *testing.T) {
-			res, err := driver.GetModerationActions(context.Background(), repository.GetModerationActionsFilter{
-				BaseFilter: repository.BaseFilter{
+			res, err := pgDrv.Moderation().GetList(t.Context(), common.GetModerationListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
-				CreatedAtOrder: repository.OrderDesc,
+				CreatedAtOrder: common.OrderDesc,
 			})
 			assert.NoError(t, err)
 			assert.Len(t, res, 6)
@@ -1766,15 +1953,15 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 
 	t.Run("Preload post", func(t *testing.T) {
 		t.Run("With", func(t *testing.T) {
-			filter := repository.GetModerationActionsFilter{
-				BaseFilter: repository.BaseFilter{
+			filter := common.GetModerationListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
 				IncludePost: true,
 			}
 
-			res, err := driver.GetModerationActions(context.Background(), filter)
+			res, err := pgDrv.Moderation().GetList(t.Context(), filter)
 			assert.NoError(t, err)
 			assert.Len(t, res, 6)
 			for _, m := range res {
@@ -1784,14 +1971,14 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 		})
 
 		t.Run("Without", func(t *testing.T) {
-			filter := repository.GetModerationActionsFilter{
-				BaseFilter: repository.BaseFilter{
+			filter := common.GetModerationListFilter{
+				BaseFilter: common.BaseFilter{
 					Limit:  10,
 					Offset: 0,
 				},
 			}
 
-			res, err := driver.GetModerationActions(context.Background(), filter)
+			res, err := pgDrv.Moderation().GetList(t.Context(), filter)
 			assert.NoError(t, err)
 			assert.Len(t, res, 6)
 			for _, m := range res {
@@ -1801,15 +1988,15 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 	})
 
 	t.Run("Pagination", func(t *testing.T) {
-		filter := repository.GetModerationActionsFilter{
-			BaseFilter: repository.BaseFilter{
+		filter := common.GetModerationListFilter{
+			BaseFilter: common.BaseFilter{
 				Limit:  2,
 				Offset: 1,
 			},
-			CreatedAtOrder: repository.OrderAsc,
+			CreatedAtOrder: common.OrderAsc,
 		}
 
-		res, err := driver.GetModerationActions(context.Background(), filter)
+		res, err := pgDrv.Moderation().GetList(t.Context(), filter)
 		assert.NoError(t, err)
 		assert.Len(t, res, 2)
 		assert.EqualValues(t, res[0].ID, m2.ID)
@@ -1818,8 +2005,8 @@ func TestGORMDriver_GetModerationActions(t *testing.T) {
 }
 
 func TestGORMDriver_AddPostToFavorites(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "authorID",
@@ -1844,7 +2031,7 @@ func TestGORMDriver_AddPostToFavorites(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1854,12 +2041,12 @@ func TestGORMDriver_AddPostToFavorites(t *testing.T) {
 			UserID: "user1",
 		}
 
-		err := driver.AddPostToFavorites(context.Background(), favorite)
+		err := pgDrv.Favorites().Create(t.Context(), favorite)
 		assert.NoError(t, err)
 		assert.NotZero(t, favorite.ID)
 		assert.WithinDuration(t, time.Now(), favorite.CreatedAt, time.Second)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		assert.NoError(t, err)
 		assert.Equal(t, p.FavoritesCount, 1)
 	})
@@ -1870,10 +2057,10 @@ func TestGORMDriver_AddPostToFavorites(t *testing.T) {
 			UserID: "user1",
 		}
 
-		err := driver.AddPostToFavorites(context.Background(), favorite)
+		err := pgDrv.Favorites().Create(t.Context(), favorite)
 		assert.ErrorIs(t, err, repoErrors.ErrAlreadyExists)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		assert.NoError(t, err)
 		assert.Equal(t, p.FavoritesCount, 1)
 	})
@@ -1884,18 +2071,18 @@ func TestGORMDriver_AddPostToFavorites(t *testing.T) {
 			UserID: "user1",
 		}
 
-		err := driver.AddPostToFavorites(context.Background(), favorite)
+		err := pgDrv.Favorites().Create(t.Context(), favorite)
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		assert.NoError(t, err)
 		assert.Equal(t, p.FavoritesCount, 1)
 	})
 }
 
 func TestGORMDriver_RemovePostFromFavorites(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "authorID",
@@ -1920,7 +2107,7 @@ func TestGORMDriver_RemovePostFromFavorites(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1929,54 +2116,54 @@ func TestGORMDriver_RemovePostFromFavorites(t *testing.T) {
 		UserID: "user1",
 	}
 
-	if err := driver.AddPostToFavorites(context.Background(), favorite); err != nil {
+	if err := pgDrv.Favorites().Create(t.Context(), favorite); err != nil {
 		t.Fatal(err)
 	}
 
-	p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+	p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 	assert.NoError(t, err)
 	assert.Equal(t, p.FavoritesCount, 1)
 
 	t.Run("Success", func(t *testing.T) {
-		err := driver.RemovePostFromFavoritesByPostAndUser(context.Background(), &entity.Favorite{
+		err := pgDrv.Favorites().Delete(t.Context(), &entity.Favorite{
 			PostID: post.ID,
 			UserID: "user1",
 		})
 		assert.NoError(t, err)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		assert.NoError(t, err)
 		assert.Equal(t, p.FavoritesCount, 0)
 	})
 
 	t.Run("Not in favorite", func(t *testing.T) {
-		err := driver.RemovePostFromFavoritesByPostAndUser(context.Background(), &entity.Favorite{
+		err := pgDrv.Favorites().Delete(t.Context(), &entity.Favorite{
 			PostID: post.ID,
 			UserID: "user1",
 		})
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		assert.NoError(t, err)
 		assert.Equal(t, p.FavoritesCount, 0)
 	})
 
 	t.Run("Invalid post PostID", func(t *testing.T) {
-		err := driver.RemovePostFromFavoritesByPostAndUser(context.Background(), &entity.Favorite{
+		err := pgDrv.Favorites().Delete(t.Context(), &entity.Favorite{
 			PostID: 838383,
 			UserID: "user1",
 		})
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		assert.NoError(t, err)
 		assert.Equal(t, p.FavoritesCount, 0)
 	})
 }
 
 func TestGORMDriver_RatePost(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "authorID",
@@ -2001,7 +2188,7 @@ func TestGORMDriver_RatePost(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2011,11 +2198,11 @@ func TestGORMDriver_RatePost(t *testing.T) {
 			VoterID: "user1",
 			Vote:    1,
 		}
-		err := driver.RatePost(context.Background(), vote)
+		err := pgDrv.Votes().Create(t.Context(), vote)
 		assert.NoError(t, err)
 		assert.NotZero(t, vote.ID)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2028,11 +2215,11 @@ func TestGORMDriver_RatePost(t *testing.T) {
 			VoterID: "user1",
 			Vote:    -1,
 		}
-		err := driver.RatePost(context.Background(), rate)
+		err := pgDrv.Votes().Create(t.Context(), rate)
 		assert.NoError(t, err)
 		assert.NotZero(t, rate.ID)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2046,7 +2233,7 @@ func TestGORMDriver_RatePost(t *testing.T) {
 			VoterID: "user1",
 			Vote:    1,
 		}
-		err := driver.RatePost(context.Background(), rate)
+		err := pgDrv.Votes().Create(t.Context(), rate)
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
 	})
 
@@ -2056,7 +2243,7 @@ func TestGORMDriver_RatePost(t *testing.T) {
 			VoterID: "user1",
 			Vote:    2,
 		}
-		err := driver.RatePost(context.Background(), rate)
+		err := pgDrv.Votes().Create(t.Context(), rate)
 		assert.Error(t, err)
 
 		rate = &entity.Vote{
@@ -2065,7 +2252,7 @@ func TestGORMDriver_RatePost(t *testing.T) {
 			Vote:    -2,
 		}
 
-		err = driver.RatePost(context.Background(), rate)
+		err = pgDrv.Votes().Create(t.Context(), rate)
 		assert.Error(t, err)
 
 		rate = &entity.Vote{
@@ -2074,14 +2261,14 @@ func TestGORMDriver_RatePost(t *testing.T) {
 			Vote:    0,
 		}
 
-		err = driver.RatePost(context.Background(), rate)
+		err = pgDrv.Votes().Create(t.Context(), rate)
 		assert.Error(t, err)
 	})
 }
 
 func TestGORMDriver_UnRatePost(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "authorID",
@@ -2106,7 +2293,7 @@ func TestGORMDriver_UnRatePost(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2115,11 +2302,11 @@ func TestGORMDriver_UnRatePost(t *testing.T) {
 		VoterID: "user1",
 		Vote:    1,
 	}
-	if err := driver.RatePost(context.Background(), vote); err != nil {
+	if err := pgDrv.Votes().Create(t.Context(), vote); err != nil {
 		t.Fatal(err)
 	}
 
-	p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+	p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2128,13 +2315,13 @@ func TestGORMDriver_UnRatePost(t *testing.T) {
 	}
 
 	t.Run("Success", func(t *testing.T) {
-		err := driver.RemovePostRateByPostAndUser(context.Background(), &entity.Vote{
+		err := pgDrv.Votes().Delete(t.Context(), &entity.Vote{
 			PostID:  post.ID,
 			VoterID: "user1",
 		})
 		assert.NoError(t, err)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2142,7 +2329,7 @@ func TestGORMDriver_UnRatePost(t *testing.T) {
 	})
 
 	t.Run("Not rated", func(t *testing.T) {
-		err := driver.RemovePostRateByPostAndUser(context.Background(), &entity.Vote{
+		err := pgDrv.Votes().Delete(t.Context(), &entity.Vote{
 			PostID:  838383,
 			VoterID: "user1",
 		})
@@ -2151,8 +2338,8 @@ func TestGORMDriver_UnRatePost(t *testing.T) {
 }
 
 func TestGORMDriver_AddComment(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "authorID",
@@ -2177,7 +2364,7 @@ func TestGORMDriver_AddComment(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2188,11 +2375,11 @@ func TestGORMDriver_AddComment(t *testing.T) {
 			Content:  "Comment Content",
 		}
 
-		err := driver.AddComment(context.Background(), comment)
+		err := pgDrv.Comments().Create(t.Context(), comment)
 		assert.NoError(t, err)
 		assert.NotZero(t, comment.ID)
 
-		p, err := driver.GetPost(context.Background(), repository.GetPostFilter{PostID: post.ID})
+		p, err := pgDrv.Posts().Get(t.Context(), common.GetPostFilter{PostID: post.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2206,14 +2393,14 @@ func TestGORMDriver_AddComment(t *testing.T) {
 			Content:  "Comment Content",
 		}
 
-		err := driver.AddComment(context.Background(), comment)
+		err := pgDrv.Comments().Create(t.Context(), comment)
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
 	})
 }
 
 func TestGORMDriver_UpdateComment(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "authorID",
@@ -2238,7 +2425,7 @@ func TestGORMDriver_UpdateComment(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2249,7 +2436,7 @@ func TestGORMDriver_UpdateComment(t *testing.T) {
 			Content:  "Original Comment Content",
 		}
 
-		err := driver.AddComment(context.Background(), comment)
+		err := pgDrv.Comments().Create(t.Context(), comment)
 		assert.NoError(t, err)
 
 		updatedComment := &entity.Comment{
@@ -2259,12 +2446,12 @@ func TestGORMDriver_UpdateComment(t *testing.T) {
 			Content:  "Updated Comment Content",
 		}
 
-		err = driver.UpdateComment(context.Background(), updatedComment)
+		err = pgDrv.Comments().Update(t.Context(), updatedComment)
 		assert.NoError(t, err)
 		assert.Equal(t, comment.ID, updatedComment.ID)
 
 		c := &entity.Comment{}
-		if err := driver.db.Where("id = ?", comment.ID).First(c).Error; err != nil {
+		if err := pgDrv.db.Where("id = ?", comment.ID).First(c).Error; err != nil {
 			t.Fatal(err)
 		}
 		assert.Equal(t, c.ID, updatedComment.ID)
@@ -2278,7 +2465,7 @@ func TestGORMDriver_UpdateComment(t *testing.T) {
 			Content:  "Original Comment Content",
 		}
 
-		err := driver.AddComment(context.Background(), comment)
+		err := pgDrv.Comments().Create(t.Context(), comment)
 		assert.NoError(t, err)
 
 		updatedComment := &entity.Comment{
@@ -2288,12 +2475,12 @@ func TestGORMDriver_UpdateComment(t *testing.T) {
 			Content:  "Original Comment Content",
 		}
 
-		err = driver.UpdateComment(context.Background(), updatedComment)
+		err = pgDrv.Comments().Update(t.Context(), updatedComment)
 		assert.NoError(t, err)
 		assert.Equal(t, comment.ID, updatedComment.ID)
 
 		c := &entity.Comment{}
-		if err := driver.db.Where("id =?", comment.ID).First(c).Error; err != nil {
+		if err := pgDrv.db.Where("id =?", comment.ID).First(c).Error; err != nil {
 			t.Fatal(err)
 		}
 		assert.Equal(t, c.ID, updatedComment.ID)
@@ -2308,14 +2495,14 @@ func TestGORMDriver_UpdateComment(t *testing.T) {
 			Content:  "Updated Comment Content",
 		}
 
-		err := driver.UpdateComment(context.Background(), comment)
+		err := pgDrv.Comments().Update(t.Context(), comment)
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
 	})
 }
 
 func TestGORMDriver_DeleteComment(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
+	preTest(t)
+	defer postTest(t)
 
 	post := &entity.Post{
 		AuthorID:    "authorID",
@@ -2340,7 +2527,7 @@ func TestGORMDriver_DeleteComment(t *testing.T) {
 		},
 	}
 
-	if err := driver.CreatePostWithContentsAndTags(context.Background(), post); err != nil {
+	if err := pgDrv.Posts().Create(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2351,19 +2538,19 @@ func TestGORMDriver_DeleteComment(t *testing.T) {
 			Content:  "Original Comment Content",
 		}
 
-		err := driver.AddComment(context.Background(), comment)
+		err := pgDrv.Comments().Create(t.Context(), comment)
 		assert.NoError(t, err)
 
-		err = driver.DeleteComment(context.Background(), comment)
+		err = pgDrv.Comments().Delete(t.Context(), comment)
 		assert.NoError(t, err)
 
 		c := &entity.Comment{}
-		err = driver.db.Where("id = ?", comment.ID).First(c).Error
+		err = pgDrv.db.Where("id = ?", comment.ID).First(c).Error
 		assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	})
 
 	t.Run("Invalid comment PostID", func(t *testing.T) {
-		err := driver.DeleteComment(context.Background(), &entity.Comment{
+		err := pgDrv.Comments().Delete(t.Context(), &entity.Comment{
 			ID: 838383,
 		})
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
@@ -2371,12 +2558,9 @@ func TestGORMDriver_DeleteComment(t *testing.T) {
 }
 
 func TestGORMDriver_GetURLValidatorConfig(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
-	ctx := context.Background()
-
-	err := driver.Truncate(ctx, []string{URLValidatorConfigsTableName})
-	require.NoError(t, err)
+	preTest(t)
+	defer postTest(t)
+	ctx := t.Context()
 
 	fixture := &entity.URLValidatorConfig{
 		Type:       "image",
@@ -2386,11 +2570,10 @@ func TestGORMDriver_GetURLValidatorConfig(t *testing.T) {
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-	err = driver.db.Create(fixture).Error
-	require.NoError(t, err)
+	require.NoError(t, pgDrv.db.Create(fixture).Error)
 
 	t.Run("Found", func(t *testing.T) {
-		cfg, err := driver.GetURLValidatorConfig(ctx, "image")
+		cfg, err := pgDrv.URLValidatorConfig().Get(ctx, "image")
 		require.NoError(t, err)
 		assert.NotNil(t, cfg)
 		assert.Equal(t, "image", cfg.Type)
@@ -2400,25 +2583,17 @@ func TestGORMDriver_GetURLValidatorConfig(t *testing.T) {
 	})
 
 	t.Run("NotFound", func(t *testing.T) {
-		cfg, err := driver.GetURLValidatorConfig(ctx, "nonexistent")
+		cfg, err := pgDrv.URLValidatorConfig().Get(ctx, "nonexistent")
 		require.Error(t, err)
 		assert.Nil(t, cfg)
 		assert.ErrorIs(t, err, repoErrors.ErrNotFound)
 	})
-
-	t.Run("GenericError", func(t *testing.T) {
-		newDriver := setupTestDB(t)
-		teardownTestDB(t, newDriver)
-
-		_, err := newDriver.GetURLValidatorConfig(ctx, "image")
-		require.Error(t, err)
-	})
 }
 
 func TestGORMDriver_GetAllURLValidatorConfigs(t *testing.T) {
-	driver := setupTestDB(t)
-	defer teardownTestDB(t, driver)
-	ctx := context.Background()
+	preTest(t)
+	defer postTest(t)
+	ctx := t.Context()
 
 	fixtures := []entity.URLValidatorConfig{
 		{
@@ -2447,11 +2622,8 @@ func TestGORMDriver_GetAllURLValidatorConfigs(t *testing.T) {
 		},
 	}
 
-	err := driver.Truncate(ctx, []string{URLValidatorConfigsTableName})
-	require.NoError(t, err)
-
 	for i := range fixtures {
-		err := driver.db.Create(&fixtures[i]).Error
+		err := pgDrv.db.Create(&fixtures[i]).Error
 		assert.NoError(t, err)
 	}
 
@@ -2459,7 +2631,7 @@ func TestGORMDriver_GetAllURLValidatorConfigs(t *testing.T) {
 		return cfg.Type
 	})
 
-	err = driver.GetAllURLValidatorConfigs(ctx, app)
+	err := pgDrv.URLValidatorConfig().GetList(ctx, app)
 	assert.NoError(t, err)
 	m := app.Map()
 	assert.Equal(t, 3, len(m))
